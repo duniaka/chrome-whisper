@@ -1,63 +1,131 @@
-// Load saved settings
-chrome.storage.sync.get(['modelSize', 'language'], (result) => {
-    if (result.modelSize) {
-        document.getElementById('modelSize').value = result.modelSize;
-    }
-    if (result.language) {
-        document.getElementById('language').value = result.language;
-    }
-});
+// WebWhispr Popup Script
 
-// Save settings when changed
-document.getElementById('modelSize').addEventListener('change', (e) => {
-    const modelSize = e.target.value;
-    chrome.storage.sync.set({ modelSize }, () => {
-        showStatus('Model preference saved', 'success');
-        // Notify background to reload model
-        chrome.runtime.sendMessage({ type: 'MODEL_CHANGED', modelSize });
+document.addEventListener('DOMContentLoaded', () => {
+    const recordBtn = document.getElementById('recordBtn');
+    const settingsBtn = document.getElementById('settingsBtn');
+    const settingsPanel = document.getElementById('settingsPanel');
+    const statusDiv = document.getElementById('status');
+    const modelSelect = document.getElementById('modelSelect');
+    const processorUrlInput = document.getElementById('processorUrl');
+
+    let isRecording = false;
+
+    // Load saved settings
+    loadSettings();
+
+    // Record button handler
+    recordBtn.addEventListener('click', () => {
+        if (!isRecording) {
+            startRecording();
+        } else {
+            stopRecording();
+        }
     });
-});
 
-document.getElementById('language').addEventListener('change', (e) => {
-    const language = e.target.value;
-    chrome.storage.sync.set({ language }, () => {
-        showStatus('Language preference saved', 'success');
-        // Notify background to reload model
-        chrome.runtime.sendMessage({ type: 'LANGUAGE_CHANGED', language });
+    // Settings button handler
+    settingsBtn.addEventListener('click', () => {
+        settingsPanel.classList.toggle('active');
     });
-});
 
-function showStatus(message, type) {
-    const status = document.getElementById('status');
-    status.textContent = message;
-    status.className = `status show ${type}`;
-    setTimeout(() => {
-        status.classList.remove('show');
-    }, 2000);
-}
+    // Save settings on change
+    modelSelect.addEventListener('change', saveSettings);
+    processorUrlInput.addEventListener('input', debounce(saveSettings, 500));
 
-// Test microphone button
-document.getElementById('testMic').addEventListener('click', async () => {
-    const button = document.getElementById('testMic');
-    button.textContent = '⏳ Testing...';
-    button.disabled = true;
-
-    try {
-        // Send message to background to start a test recording
-        await chrome.runtime.sendMessage({ type: 'TEST_MIC' });
-
-        showStatus('Look for permission prompt! Click Allow when it appears', 'info');
-
-        // Wait a bit, then stop the test
-        setTimeout(() => {
-            chrome.runtime.sendMessage({ type: 'STOP_TEST' });
-            button.textContent = '🎤 Test Microphone Permission';
-            button.disabled = false;
-            showStatus('Test complete! Try using the extension now', 'success');
-        }, 3000);
-    } catch (error) {
-        showStatus('Test failed: ' + error.message, 'error');
-        button.textContent = '🎤 Test Microphone Permission';
-        button.disabled = false;
+    // Check if Mac for shortcut display
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    if (isMac) {
+        document.querySelectorAll('.kbd').forEach(kbd => {
+            kbd.textContent = kbd.textContent.replace('Ctrl', 'Cmd');
+        });
     }
+
+    function startRecording() {
+        console.log('Starting recording from popup...');
+
+        chrome.runtime.sendMessage({
+            type: 'START_RECORDING'
+        }, (response) => {
+            if (response?.success) {
+                isRecording = true;
+                updateUI();
+            }
+        });
+    }
+
+    function stopRecording() {
+        console.log('Stopping recording from popup...');
+
+        chrome.runtime.sendMessage({
+            type: 'STOP_RECORDING'
+        }, (response) => {
+            if (response?.success) {
+                isRecording = false;
+                updateUI();
+            }
+        });
+    }
+
+    function updateUI() {
+        if (isRecording) {
+            recordBtn.textContent = 'Stop Recording';
+            recordBtn.classList.add('recording');
+            statusDiv.textContent = 'Recording in progress...';
+        } else {
+            recordBtn.textContent = 'Start Recording';
+            recordBtn.classList.remove('recording');
+            statusDiv.textContent = 'Ready to record';
+        }
+    }
+
+    function loadSettings() {
+        chrome.storage.local.get(['whisperModel', 'processorUrl'], (data) => {
+            if (data.whisperModel) {
+                modelSelect.value = data.whisperModel;
+            }
+            if (data.processorUrl) {
+                processorUrlInput.value = data.processorUrl;
+            }
+        });
+    }
+
+    function saveSettings() {
+        const settings = {
+            whisperModel: modelSelect.value,
+            processorUrl: processorUrlInput.value
+        };
+
+        chrome.storage.local.set(settings, () => {
+            console.log('Settings saved:', settings);
+
+            // Notify background script of settings change
+            chrome.runtime.sendMessage({
+                type: 'SETTINGS_UPDATED',
+                settings: settings
+            });
+        });
+    }
+
+    function debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    }
+
+    // Listen for status updates
+    chrome.runtime.onMessage.addListener((message) => {
+        if (message.type === 'RECORDING_STARTED') {
+            isRecording = true;
+            updateUI();
+        } else if (message.type === 'RECORDING_STOPPED' ||
+                   message.type === 'TRANSCRIPTION_COMPLETE') {
+            isRecording = false;
+            updateUI();
+        }
+    });
 });

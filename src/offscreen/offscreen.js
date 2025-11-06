@@ -1,272 +1,478 @@
-// Offscreen document for WebWhispr
-// Handles audio recording and transcription in extension context
+// WebWhispr Offscreen Document
+// Manages recording iframe and GitHub Pages processor iframe
 
-import { pipeline } from '@xenova/transformers';
-import { CONFIG, MESSAGE_TYPES } from '../config.js';
-import logger from '../logger.js';
+class OffscreenManager {
+    constructor() {
+        this.processorIframe = null;
+        this.recordingIframe = null;
+        this.isProcessorReady = false;
+        this.pendingRequests = new Map(); // Track pending transcription requests
+        this.requestIdCounter = 0;
 
-let transcriber = null;
-let isRecording = false;
-let modelSize = CONFIG.DEFAULTS.MODEL_SIZE;
-let language = CONFIG.DEFAULTS.LANGUAGE;
-let settingsLoaded = false;
-let recorderIframe = null;
+        // GitHub Pages URL - CHANGE THIS TO YOUR GITHUB PAGES URL
+        this.PROCESSOR_URL = 'https://YOUR_USERNAME.github.io/webwhispr-processor/processor.html';
 
-// Load settings from background (chrome.storage not available in offscreen)
-async function loadSettings() {
-    if (settingsLoaded) return;
+        this.init();
+    }
 
-    return new Promise((resolve) => {
-        // Request settings from background script
-        chrome.runtime.sendMessage({ type: MESSAGE_TYPES.GET_SETTINGS }, (response) => {
-            if (response) {
-                modelSize = response.modelSize || CONFIG.DEFAULTS.MODEL_SIZE;
-                language = response.language || CONFIG.DEFAULTS.LANGUAGE;
-                settingsLoaded = true;
-                logger.log('Settings loaded:', { modelSize, language });
+    init() {
+        console.log('[Offscreen] Initializing...');
+        this.setupMessageListeners();
+        this.updateStatus('Offscreen initialized');
+    }
+
+    setupMessageListeners() {
+        // Listen for messages from the background script
+        chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+            console.log('[Offscreen] Received message:', message);
+
+            switch (message.type) {
+                case 'START_RECORDING':
+                    this.startRecording();
+                    sendResponse({ success: true });
+                    break;
+
+                case 'STOP_RECORDING':
+                    this.stopRecording();
+                    sendResponse({ success: true });
+                    break;
+
+                case 'INITIALIZE_PROCESSOR':
+                    this.initializeProcessor();
+                    sendResponse({ success: true });
+                    break;
+
+                default:
+                    console.log('[Offscreen] Unknown message type:', message.type);
             }
-            resolve();
-        });
-    });
-}
 
-// Load Whisper model
-async function loadModel() {
-    await loadSettings();
-
-    const modelName = language === 'en' || language === 'multilingual'
-        ? `${CONFIG.MODEL_PREFIX}${modelSize}${language === 'en' ? '.en' : ''}`
-        : `${CONFIG.MODEL_PREFIX}${modelSize}`;
-
-    logger.log('Loading model:', modelName);
-
-    try {
-        transcriber = await pipeline('automatic-speech-recognition', modelName, {
-            progress_callback: (progress) => {
-                if (progress.status === 'downloading') {
-                    const percent = Math.round(progress.progress || 0);
-                    logger.log(`Downloading model... ${percent}%`);
-                    // Send progress to background
-                    chrome.runtime.sendMessage({
-                        type: MESSAGE_TYPES.MODEL_PROGRESS,
-                        progress: percent,
-                        status: 'downloading'
-                    }).catch(() => {});
-                } else if (progress.status === 'loading') {
-                    logger.log('Loading model files...');
-                } else if (progress.status === 'ready') {
-                    logger.log('Model ready');
-                }
-            }
-        });
-        logger.log('Pipeline created successfully');
-    } catch (error) {
-        logger.error('Error creating pipeline:', error.message);
-        throw error;
-    }
-
-    logger.log('Model loaded successfully');
-    chrome.runtime.sendMessage({
-        type: MESSAGE_TYPES.MODEL_READY
-    }).catch(() => {});
-}
-
-// Start recording
-async function startRecording() {
-    if (isRecording) {
-        logger.log('Already recording');
-        return;
-    }
-
-    logger.log('Creating recorder iframe');
-    isRecording = true;
-
-    // Create iframe for recording
-    recorderIframe = document.createElement('iframe');
-    recorderIframe.src = CONFIG.RECORDER_HTML;
-    recorderIframe.style.display = 'none';
-    document.body.appendChild(recorderIframe);
-
-    // Wait for iframe to load
-    await new Promise(resolve => {
-        recorderIframe.onload = resolve;
-    });
-
-    logger.log('Recorder iframe loaded, starting recording');
-
-    // Send start command to iframe
-    recorderIframe.contentWindow.postMessage({ type: MESSAGE_TYPES.RECORDER_START }, '*');
-}
-
-// Stop recording
-function stopRecording() {
-    if (!isRecording) {
-        logger.log('Not recording');
-        return;
-    }
-
-    logger.log('Stopping recording in iframe');
-
-    if (recorderIframe?.contentWindow) {
-        recorderIframe.contentWindow.postMessage({ type: MESSAGE_TYPES.RECORDER_STOP }, '*');
-    }
-}
-
-// Destroy iframe and release all resources
-function destroyRecorderIframe() {
-    if (recorderIframe) {
-        logger.log('Destroying recorder iframe to release microphone');
-        recorderIframe.remove();
-        recorderIframe = null;
-    }
-}
-
-// Transcribe audio
-async function transcribeAudio(audioBlob) {
-    try {
-        // Ensure model is loaded
-        if (!transcriber) {
-            logger.log('Model not loaded, loading now');
-            await loadModel();
-        }
-
-        logger.log('Transcribing audio');
-
-        // Convert blob to audio buffer
-        const arrayBuffer = await audioBlob.arrayBuffer();
-        const audioContext = new AudioContext({ sampleRate: CONFIG.SAMPLE_RATE });
-        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-
-        // Get mono audio
-        let audio;
-        if (audioBuffer.numberOfChannels === 2) {
-            const left = audioBuffer.getChannelData(0);
-            const right = audioBuffer.getChannelData(1);
-            audio = new Float32Array(left.length);
-            for (let i = 0; i < left.length; i++) {
-                audio[i] = (left[i] + right[i]) / 2;
-            }
-        } else {
-            audio = audioBuffer.getChannelData(0);
-        }
-
-        // Transcribe
-        const options = language === 'multilingual'
-            ? { language: null } // Auto-detect
-            : language !== 'en'
-                ? { language: language }
-                : {};
-
-        logger.log('Running transcription');
-        const result = await transcriber(audio, options);
-
-        if (result && result.text) {
-            const text = result.text.trim();
-            logger.log('Transcription complete:', text);
-
-            // Send result to background
-            chrome.runtime.sendMessage({
-                type: MESSAGE_TYPES.TRANSCRIPTION_COMPLETE,
-                text: text
-            }).catch(() => {});
-        } else {
-            logger.log('No speech detected');
-            chrome.runtime.sendMessage({
-                type: MESSAGE_TYPES.ERROR,
-                error: 'No speech detected'
-            }).catch(() => {});
-        }
-
-    } catch (error) {
-        logger.error('Transcription error:', error.message);
-        chrome.runtime.sendMessage({
-            type: MESSAGE_TYPES.ERROR,
-            error: error.message
-        }).catch(() => {});
-    }
-}
-
-// Listen for messages from background
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    switch (message.type) {
-        case MESSAGE_TYPES.START_RECORDING:
-            startRecording();
-            sendResponse({ received: true });
-            break;
-
-        case MESSAGE_TYPES.STOP_RECORDING:
-            stopRecording();
-            sendResponse({ received: true });
-            break;
-
-        case MESSAGE_TYPES.LOAD_MODEL:
-            loadModel().then(() => {
-                sendResponse({ success: true });
-            }).catch(error => {
-                sendResponse({ success: false, error: error.message });
-            });
             return true; // Keep channel open for async response
+        });
 
-        case MESSAGE_TYPES.RELOAD_MODEL:
-            transcriber = null; // Force reload on next use
-            settingsLoaded = false; // Force reload settings
-            sendResponse({ received: true });
-            break;
+        // Listen for messages from iframes
+        window.addEventListener('message', (event) => {
+            this.handleIframeMessage(event);
+        });
     }
-});
 
-// Listen for messages from recorder iframe
-window.addEventListener('message', async (event) => {
-    switch (event.data.type) {
-        case MESSAGE_TYPES.RECORDER_STARTED:
-            // Notify background that recording started
-            chrome.runtime.sendMessage({
-                type: MESSAGE_TYPES.RECORDING_STARTED
-            }).catch(() => {});
-            break;
+    handleIframeMessage(event) {
+        // Handle messages from both recording and processor iframes
+        const { type, data } = event.data || {};
 
-        case MESSAGE_TYPES.RECORDER_COMPLETE:
-            isRecording = false;
+        console.log('[Offscreen] Iframe message:', type, 'from', event.origin);
 
-            // Destroy iframe immediately to release microphone
-            destroyRecorderIframe();
+        switch (type) {
+            case 'RECORDING_READY':
+                console.log('[Offscreen] Recording iframe ready');
+                this.updateStatus('Recording ready');
+                break;
 
-            // Notify that we're processing
-            chrome.runtime.sendMessage({
-                type: MESSAGE_TYPES.PROCESSING
-            }).catch(() => {});
+            case 'RECORDING_DATA':
+                console.log('[Offscreen] Received audio data from recording iframe');
+                this.handleAudioData(data.audio);
+                // Remove recording iframe after getting the audio
+                this.removeRecordingIframe();
+                break;
 
-            // Convert arrayBuffer to blob and transcribe
-            const audioBlob = new Blob([event.data.audioData], { type: CONFIG.AUDIO_TYPE });
-            await transcribeAudio(audioBlob);
-            break;
-
-        case MESSAGE_TYPES.RECORDER_ERROR:
-            isRecording = false;
-            destroyRecorderIframe();
-
-            let errorMessage = event.data.error || 'Microphone access denied';
-
-            if (errorMessage.includes('Permission denied') || errorMessage.includes('NotAllowedError')) {
-                errorMessage = 'Opening mic settings...';
+            case 'RECORDING_ERROR':
+                console.error('[Offscreen] Recording error:', data.error);
+                this.updateStatus(`Recording error: ${data.error}`);
+                this.removeRecordingIframe();
                 chrome.runtime.sendMessage({
-                    type: MESSAGE_TYPES.OPEN_MIC_SETTINGS
-                }).catch(() => {});
-            }
+                    type: 'RECORDING_ERROR',
+                    error: data.error
+                });
+                break;
 
-            chrome.runtime.sendMessage({
-                type: MESSAGE_TYPES.ERROR,
-                error: errorMessage
-            }).catch(() => {});
-            break;
+            case 'PROCESSOR_READY':
+                console.log('[Offscreen] Processor iframe ready');
+                this.isProcessorReady = true;
+                this.updateStatus('Processor ready');
+                break;
+
+            case 'MODEL_PROGRESS':
+                console.log('[Offscreen] Model loading progress:', data.progress);
+                this.updateStatus(`Loading model: ${Math.round((data.progress?.progress || 0) * 100)}%`);
+                break;
+
+            case 'TRANSCRIPTION_RESULT':
+                console.log('[Offscreen] Transcription result received');
+                this.handleTranscriptionResult(data);
+                break;
+
+            case 'TRANSCRIPTION_ERROR':
+                console.error('[Offscreen] Transcription error:', data.error);
+                this.handleTranscriptionError(data);
+                break;
+
+            case 'PROCESSOR_ERROR':
+                console.error('[Offscreen] Processor error:', data.error);
+                this.updateStatus(`Processor error: ${data.error}`);
+                break;
+        }
     }
-});
 
-logger.log('Offscreen document ready and listening for messages');
+    startRecording() {
+        console.log('[Offscreen] Starting recording...');
+        this.updateStatus('Starting recording...');
 
-// Load settings on startup
-loadSettings().then(() => {
-    logger.log('Initial settings loaded');
-}).catch(error => {
-    logger.error('Error loading settings:', error.message);
-});
+        // Create recording iframe if it doesn't exist
+        if (!this.recordingIframe) {
+            this.createRecordingIframe();
+        } else {
+            // Send message to existing recording iframe to start
+            this.recordingIframe.contentWindow.postMessage({
+                type: 'START_RECORDING'
+            }, '*');
+        }
+    }
+
+    stopRecording() {
+        console.log('[Offscreen] Stopping recording...');
+        this.updateStatus('Stopping recording...');
+
+        if (this.recordingIframe) {
+            // Send message to recording iframe to stop and send data
+            this.recordingIframe.contentWindow.postMessage({
+                type: 'STOP_RECORDING'
+            }, '*');
+        }
+    }
+
+    createRecordingIframe() {
+        console.log('[Offscreen] Creating recording iframe...');
+
+        const container = document.getElementById('iframe-container');
+
+        // Create the iframe element
+        const iframe = document.createElement('iframe');
+        iframe.id = 'recording-iframe';
+        iframe.style.width = '100%';
+        iframe.style.height = '150px';
+        iframe.style.border = '1px solid #ff9999';
+        iframe.style.borderRadius = '4px';
+        iframe.style.marginBottom = '10px';
+
+        // Create a data URL for the recording page
+        const recordingHTML = `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Recording</title>
+    <style>
+        body {
+            margin: 10px;
+            font-family: system-ui;
+            background: #ffe4e4;
+        }
+        #status {
+            padding: 10px;
+            background: white;
+            border-radius: 4px;
+        }
+        button {
+            margin: 5px;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            background: #ff6b6b;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #ff5252;
+        }
+    </style>
+</head>
+<body>
+    <div id="status">Recording iframe loading...</div>
+    <button onclick="testMicrophone()">Test Microphone</button>
+    <script>
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let stream = null;
+
+        function updateStatus(text) {
+            document.getElementById('status').textContent = text;
+        }
+
+        async function testMicrophone() {
+            try {
+                const testStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                updateStatus('Microphone access granted');
+                testStream.getTracks().forEach(track => track.stop());
+            } catch (error) {
+                updateStatus('Microphone error: ' + error.message);
+            }
+        }
+
+        async function startRecording() {
+            try {
+                updateStatus('Requesting microphone access...');
+
+                // Request microphone access
+                stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        sampleRate: 16000 // Whisper works best with 16kHz
+                    }
+                });
+
+                updateStatus('Recording started');
+
+                // Create MediaRecorder
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: 'audio/webm'
+                });
+
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+
+                mediaRecorder.onstop = async () => {
+                    updateStatus('Processing audio...');
+
+                    // Create blob from chunks
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+
+                    // Convert to base64 for easier transport
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        const base64Audio = reader.result;
+
+                        // Send audio data to parent
+                        window.parent.postMessage({
+                            type: 'RECORDING_DATA',
+                            data: {
+                                audio: base64Audio
+                            }
+                        }, '*');
+
+                        updateStatus('Audio sent');
+                    };
+                    reader.readAsDataURL(audioBlob);
+
+                    // Clean up
+                    if (stream) {
+                        stream.getTracks().forEach(track => track.stop());
+                    }
+                };
+
+                // Start recording
+                mediaRecorder.start();
+
+                // Send ready message
+                window.parent.postMessage({
+                    type: 'RECORDING_READY'
+                }, '*');
+
+            } catch (error) {
+                console.error('Recording error:', error);
+                updateStatus('Error: ' + error.message);
+
+                window.parent.postMessage({
+                    type: 'RECORDING_ERROR',
+                    data: { error: error.message }
+                }, '*');
+            }
+        }
+
+        function stopRecording() {
+            updateStatus('Stopping recording...');
+
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            } else {
+                updateStatus('No active recording');
+            }
+        }
+
+        // Listen for messages from parent
+        window.addEventListener('message', (event) => {
+            const { type } = event.data || {};
+
+            switch (type) {
+                case 'START_RECORDING':
+                    startRecording();
+                    break;
+                case 'STOP_RECORDING':
+                    stopRecording();
+                    break;
+            }
+        });
+
+        // Initialize
+        updateStatus('Recording iframe ready');
+
+        // Automatically start recording when iframe is created
+        startRecording();
+    </script>
+</body>
+</html>`;
+
+        // Convert HTML to data URL
+        const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(recordingHTML)}`;
+        iframe.src = dataUrl;
+
+        // Add to container
+        container.appendChild(iframe);
+        this.recordingIframe = iframe;
+
+        this.updateStatus('Recording iframe created');
+    }
+
+    removeRecordingIframe() {
+        console.log('[Offscreen] Removing recording iframe...');
+
+        if (this.recordingIframe) {
+            this.recordingIframe.remove();
+            this.recordingIframe = null;
+            this.updateStatus('Recording iframe removed');
+        }
+    }
+
+    initializeProcessor() {
+        console.log('[Offscreen] Initializing processor...');
+
+        if (!this.processorIframe) {
+            this.createProcessorIframe();
+        } else if (this.isProcessorReady) {
+            // Processor already ready
+            chrome.runtime.sendMessage({
+                type: 'PROCESSOR_INITIALIZED'
+            });
+        }
+    }
+
+    createProcessorIframe() {
+        console.log('[Offscreen] Creating processor iframe...');
+        this.updateStatus('Creating processor iframe...');
+
+        const container = document.getElementById('iframe-container');
+
+        // Create the iframe element
+        const iframe = document.createElement('iframe');
+        iframe.id = 'processor-iframe';
+        iframe.style.width = '100%';
+        iframe.style.height = '150px';
+        iframe.style.border = '1px solid #9999ff';
+        iframe.style.borderRadius = '4px';
+        iframe.style.marginBottom = '10px';
+
+        // Set the GitHub Pages URL
+        iframe.src = this.PROCESSOR_URL;
+
+        // Add to container
+        container.appendChild(iframe);
+        this.processorIframe = iframe;
+
+        this.updateStatus('Processor iframe created, waiting for initialization...');
+    }
+
+    async handleAudioData(audioData) {
+        console.log('[Offscreen] Processing audio data...');
+        this.updateStatus('Sending audio to processor...');
+
+        // Ensure processor is initialized
+        if (!this.processorIframe) {
+            await this.initializeProcessor();
+
+            // Wait a bit for processor to be ready
+            await new Promise(resolve => {
+                const checkReady = setInterval(() => {
+                    if (this.isProcessorReady) {
+                        clearInterval(checkReady);
+                        resolve();
+                    }
+                }, 100);
+
+                // Timeout after 10 seconds
+                setTimeout(() => {
+                    clearInterval(checkReady);
+                    resolve();
+                }, 10000);
+            });
+        }
+
+        // Generate request ID
+        const requestId = `req_${++this.requestIdCounter}`;
+
+        // Store pending request
+        this.pendingRequests.set(requestId, {
+            timestamp: Date.now()
+        });
+
+        // Send audio to processor iframe
+        if (this.processorIframe) {
+            this.processorIframe.contentWindow.postMessage({
+                type: 'TRANSCRIBE_AUDIO',
+                data: {
+                    audio: audioData,
+                    requestId: requestId
+                }
+            }, '*');
+
+            this.updateStatus('Audio sent to processor, waiting for transcription...');
+        } else {
+            console.error('[Offscreen] Processor iframe not available');
+            this.updateStatus('Error: Processor not available');
+        }
+    }
+
+    handleTranscriptionResult(data) {
+        console.log('[Offscreen] Handling transcription result:', data);
+
+        const { requestId, text } = data;
+
+        // Remove from pending requests
+        if (this.pendingRequests.has(requestId)) {
+            this.pendingRequests.delete(requestId);
+        }
+
+        this.updateStatus(`Transcription complete: "${text}"`);
+
+        // Send result to background script
+        chrome.runtime.sendMessage({
+            type: 'TRANSCRIPTION_COMPLETE',
+            text: text
+        });
+    }
+
+    handleTranscriptionError(data) {
+        console.error('[Offscreen] Transcription error:', data);
+
+        const { requestId, error } = data;
+
+        // Remove from pending requests
+        if (this.pendingRequests.has(requestId)) {
+            this.pendingRequests.delete(requestId);
+        }
+
+        this.updateStatus(`Transcription error: ${error}`);
+
+        // Send error to background script
+        chrome.runtime.sendMessage({
+            type: 'TRANSCRIPTION_ERROR',
+            error: error
+        });
+    }
+
+    updateStatus(text) {
+        const statusEl = document.getElementById('status');
+        if (statusEl) {
+            statusEl.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+        }
+        console.log('[Offscreen Status]', text);
+    }
+}
+
+// Initialize the offscreen manager
+const offscreenManager = new OffscreenManager();
+
+// Notify background that offscreen is ready
+chrome.runtime.sendMessage({ type: 'OFFSCREEN_READY' });

@@ -1,194 +1,283 @@
-// Background service worker for WebWhispr
+// WebWhispr Background Service Worker
+// Manages offscreen document lifecycle and message routing
 
-import { CONFIG, MESSAGE_TYPES } from './config.js';
-import logger from './logger.js';
-import InitializationManager from './initializationManager.js';
+class BackgroundService {
+    constructor() {
+        this.offscreenDocument = null;
+        this.activeTabId = null;
+        this.isRecording = false;
 
-let offscreenDocumentCreated = false;
-let settingsOpenedTimestamp = 0;
-const offscreenInitManager = new InitializationManager();
-
-// Create offscreen document for audio processing
-async function createOffscreenDocument() {
-    // Check if offscreen document already exists
-    const existingContexts = await chrome.runtime.getContexts({
-        contextTypes: ['OFFSCREEN_DOCUMENT']
-    });
-
-    if (existingContexts.length > 0) {
-        offscreenDocumentCreated = true;
-        return;
+        this.init();
     }
 
-    try {
-        await chrome.offscreen.createDocument({
-            url: CONFIG.OFFSCREEN_HTML,
-            reasons: ['USER_MEDIA'],
-            justification: 'Recording audio for speech-to-text transcription'
+    init() {
+        console.log('[Background] Initializing WebWhispr...');
+        this.setupMessageListeners();
+        this.setupActionListener();
+    }
+
+    setupMessageListeners() {
+        // Listen for messages from content scripts and offscreen
+        chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+            console.log('[Background] Received message:', message.type);
+
+            switch (message.type) {
+                case 'START_RECORDING':
+                    this.handleStartRecording(sender.tab?.id);
+                    sendResponse({ success: true });
+                    break;
+
+                case 'STOP_RECORDING':
+                    this.handleStopRecording();
+                    sendResponse({ success: true });
+                    break;
+
+                case 'OFFSCREEN_READY':
+                    console.log('[Background] Offscreen document ready');
+                    break;
+
+                case 'TRANSCRIPTION_COMPLETE':
+                    this.handleTranscriptionComplete(message.text);
+                    break;
+
+                case 'TRANSCRIPTION_ERROR':
+                    this.handleTranscriptionError(message.error);
+                    break;
+
+                case 'RECORDING_ERROR':
+                    this.handleRecordingError(message.error);
+                    break;
+
+                default:
+                    console.log('[Background] Unknown message type:', message.type);
+            }
+
+            return true; // Keep channel open for async response
         });
-        offscreenDocumentCreated = true;
-        logger.log('Offscreen document created');
-    } catch (error) {
-        if (error.message.includes('Only a single offscreen')) {
-            // Already exists, that's fine
-            offscreenDocumentCreated = true;
-        } else {
-            logger.error('Failed to create offscreen document:', error);
-            offscreenDocumentCreated = false;
+    }
+
+    setupActionListener() {
+        // Handle clicks on the extension icon
+        chrome.action.onClicked.addListener((tab) => {
+            console.log('[Background] Extension icon clicked');
+
+            if (!this.isRecording) {
+                this.handleStartRecording(tab.id);
+            } else {
+                this.handleStopRecording();
+            }
+        });
+    }
+
+    async handleStartRecording(tabId) {
+        console.log('[Background] Starting recording for tab:', tabId);
+
+        this.activeTabId = tabId;
+        this.isRecording = true;
+
+        // Ensure offscreen document exists
+        await this.ensureOffscreenDocument();
+
+        // Initialize processor in offscreen
+        await this.sendToOffscreen({
+            type: 'INITIALIZE_PROCESSOR'
+        });
+
+        // Wait a bit for processor to initialize
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Start recording
+        await this.sendToOffscreen({
+            type: 'START_RECORDING'
+        });
+
+        // Update extension icon to show recording state
+        this.updateIcon(true);
+
+        // Notify content script
+        if (tabId) {
+            chrome.tabs.sendMessage(tabId, {
+                type: 'RECORDING_STARTED'
+            });
+        }
+    }
+
+    async handleStopRecording() {
+        console.log('[Background] Stopping recording');
+
+        this.isRecording = false;
+
+        // Stop recording in offscreen
+        await this.sendToOffscreen({
+            type: 'STOP_RECORDING'
+        });
+
+        // Update extension icon
+        this.updateIcon(false);
+
+        // Notify content script
+        if (this.activeTabId) {
+            chrome.tabs.sendMessage(this.activeTabId, {
+                type: 'RECORDING_STOPPED'
+            });
+        }
+    }
+
+    async handleTranscriptionComplete(text) {
+        console.log('[Background] Transcription complete:', text);
+
+        // Send transcription to content script
+        if (this.activeTabId) {
+            try {
+                await chrome.tabs.sendMessage(this.activeTabId, {
+                    type: 'INSERT_TRANSCRIPTION',
+                    text: text
+                });
+            } catch (error) {
+                console.error('[Background] Failed to send transcription to tab:', error);
+                this.showNotification('Transcription Complete', text);
+            }
+        }
+
+        // Reset recording state
+        this.isRecording = false;
+        this.updateIcon(false);
+    }
+
+    handleTranscriptionError(error) {
+        console.error('[Background] Transcription error:', error);
+
+        // Notify user
+        this.showNotification('Transcription Error', error);
+
+        // Reset recording state
+        this.isRecording = false;
+        this.updateIcon(false);
+
+        // Notify content script
+        if (this.activeTabId) {
+            chrome.tabs.sendMessage(this.activeTabId, {
+                type: 'TRANSCRIPTION_ERROR',
+                error: error
+            });
+        }
+    }
+
+    handleRecordingError(error) {
+        console.error('[Background] Recording error:', error);
+
+        // Notify user
+        this.showNotification('Recording Error', error);
+
+        // Reset recording state
+        this.isRecording = false;
+        this.updateIcon(false);
+
+        // Notify content script
+        if (this.activeTabId) {
+            chrome.tabs.sendMessage(this.activeTabId, {
+                type: 'RECORDING_ERROR',
+                error: error
+            });
+        }
+    }
+
+    async ensureOffscreenDocument() {
+        // Check if offscreen document already exists
+        const existingContexts = await chrome.runtime.getContexts({
+            contextTypes: ['OFFSCREEN_DOCUMENT']
+        });
+
+        if (existingContexts.length > 0) {
+            console.log('[Background] Offscreen document already exists');
+            return;
+        }
+
+        console.log('[Background] Creating offscreen document...');
+
+        try {
+            await chrome.offscreen.createDocument({
+                url: 'offscreen/offscreen.html',
+                reasons: ['USER_MEDIA', 'IFRAME_SCRIPTING'],
+                justification: 'Recording audio from microphone and processing with Whisper AI'
+            });
+
+            console.log('[Background] Offscreen document created');
+
+            // Wait for offscreen to be ready
+            await new Promise(resolve => {
+                const listener = (message) => {
+                    if (message.type === 'OFFSCREEN_READY') {
+                        chrome.runtime.onMessage.removeListener(listener);
+                        resolve();
+                    }
+                };
+                chrome.runtime.onMessage.addListener(listener);
+
+                // Timeout after 5 seconds
+                setTimeout(resolve, 5000);
+            });
+
+        } catch (error) {
+            console.error('[Background] Failed to create offscreen document:', error);
             throw error;
         }
     }
-}
 
-// Ensure offscreen document exists using initialization manager
-async function ensureOffscreenDocument() {
-    return offscreenInitManager.initialize(createOffscreenDocument);
-}
+    async sendToOffscreen(message) {
+        console.log('[Background] Sending to offscreen:', message.type);
 
-// Helper function to safely send message to active tab
-function sendToActiveTab(message) {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs?.[0]?.id) {
-            chrome.tabs.sendMessage(tabs[0].id, message).catch(() => {});
+        try {
+            // Ensure offscreen document exists
+            await this.ensureOffscreenDocument();
+
+            // Send message
+            const response = await chrome.runtime.sendMessage(message);
+            return response;
+        } catch (error) {
+            console.error('[Background] Failed to send to offscreen:', error);
+            throw error;
         }
-    });
-}
-
-// Message handlers organized by source
-const messageHandlers = {
-    // Popup handlers
-    [MESSAGE_TYPES.GET_SETTINGS]: (message, sender, sendResponse) => {
-        chrome.storage.sync.get(['modelSize', 'language'], (result) => {
-            sendResponse({
-                modelSize: result.modelSize || CONFIG.DEFAULTS.MODEL_SIZE,
-                language: result.language || CONFIG.DEFAULTS.LANGUAGE
-            });
-        });
-        return true;
-    },
-
-    [MESSAGE_TYPES.MODEL_CHANGED]: () => {
-        if (offscreenDocumentCreated) {
-            chrome.runtime.sendMessage({ type: MESSAGE_TYPES.RELOAD_MODEL }).catch(() => {});
-        }
-    },
-
-    [MESSAGE_TYPES.LANGUAGE_CHANGED]: () => {
-        if (offscreenDocumentCreated) {
-            chrome.runtime.sendMessage({ type: MESSAGE_TYPES.RELOAD_MODEL }).catch(() => {});
-        }
-    },
-
-    [MESSAGE_TYPES.TEST_MIC]: () => {
-        ensureOffscreenDocument()
-            .then(() => chrome.runtime.sendMessage({ type: MESSAGE_TYPES.START_RECORDING }))
-            .catch(error => logger.error('Error in test:', error));
-    },
-
-    [MESSAGE_TYPES.STOP_TEST]: () => {
-        if (offscreenDocumentCreated) {
-            chrome.runtime.sendMessage({ type: MESSAGE_TYPES.STOP_RECORDING }).catch(() => {});
-        }
-    },
-
-    // Content script handlers
-    [`${MESSAGE_TYPES.START_RECORDING}:tab`]: () => {
-        ensureOffscreenDocument()
-            .then(() => chrome.runtime.sendMessage({ type: MESSAGE_TYPES.START_RECORDING }))
-            .catch(error => logger.error('Error starting recording:', error));
-    },
-
-    [`${MESSAGE_TYPES.STOP_RECORDING}:tab`]: () => {
-        if (offscreenDocumentCreated) {
-            chrome.runtime.sendMessage({ type: MESSAGE_TYPES.STOP_RECORDING }).catch(error => {
-                logger.error('Error stopping recording:', error);
-            });
-        }
-    },
-
-    // Offscreen handlers
-    [MESSAGE_TYPES.RECORDING_STARTED]: () => {
-        sendToActiveTab({ type: MESSAGE_TYPES.SHOW_RECORDING });
-    },
-
-    [MESSAGE_TYPES.PROCESSING]: () => {
-        sendToActiveTab({ type: MESSAGE_TYPES.SHOW_PROCESSING });
-    },
-
-    [MESSAGE_TYPES.TRANSCRIPTION_COMPLETE]: (message) => {
-        sendToActiveTab({
-            type: MESSAGE_TYPES.INSERT_TEXT,
-            text: message.text
-        });
-    },
-
-    [MESSAGE_TYPES.ERROR]: (message) => {
-        sendToActiveTab({
-            type: MESSAGE_TYPES.SHOW_ERROR,
-            error: message.error
-        });
-    },
-
-    [MESSAGE_TYPES.OPEN_MIC_SETTINGS]: () => {
-        // Prevent duplicate opens within 2 seconds
-        const now = Date.now();
-        if (now - settingsOpenedTimestamp > CONFIG.SETTINGS_DEBOUNCE) {
-            settingsOpenedTimestamp = now;
-            chrome.tabs.create({
-                url: `chrome://settings/content/siteDetails?site=${CONFIG.EXTENSION_ID_PATH}`
-            });
-        }
-    },
-
-    [MESSAGE_TYPES.MODEL_PROGRESS]: (message) => {
-        logger.log(`Model ${message.status} ${message.progress}%`);
-    },
-
-    [MESSAGE_TYPES.MODEL_READY]: () => {
-        logger.log('Model ready');
-    },
-
-    [MESSAGE_TYPES.CLOSE_OFFSCREEN]: () => {
-        chrome.offscreen.closeDocument().then(() => {
-            offscreenDocumentCreated = false;
-        }).catch(error => {
-            logger.error('Error closing offscreen document:', error);
-        });
-    }
-};
-
-// Main message handler
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    // Determine handler key based on message type and sender
-    let handlerKey = message.type;
-    if (sender.tab) {
-        handlerKey = `${message.type}:tab`;
     }
 
-    const handler = messageHandlers[handlerKey] || messageHandlers[message.type];
+    updateIcon(isRecording) {
+        const iconPath = isRecording ? {
+            16: 'icons/icon16-recording.png',
+            48: 'icons/icon48-recording.png',
+            128: 'icons/icon128-recording.png'
+        } : {
+            16: 'icons/icon16.png',
+            48: 'icons/icon48.png',
+            128: 'icons/icon128.png'
+        };
 
-    if (handler) {
-        const result = handler(message, sender, sendResponse);
-        // If handler returns true, response is async
-        if (result === true) return true;
+        // Only update if icons exist, otherwise use badge
+        chrome.action.setIcon({ path: iconPath }).catch(() => {
+            // Fallback to badge if icons don't exist
+            chrome.action.setBadgeText({
+                text: isRecording ? 'REC' : ''
+            });
+
+            chrome.action.setBadgeBackgroundColor({
+                color: '#FF0000'
+            });
+        });
+
+        // Update tooltip
+        chrome.action.setTitle({
+            title: isRecording ? 'Click to stop recording' : 'Click to start voice input'
+        });
     }
-});
 
-// Create offscreen document on installation
-chrome.runtime.onInstalled.addListener(async () => {
-    logger.log('Extension installed/updated');
-    await createOffscreenDocument();
-});
+    showNotification(title, message) {
+        console.log('[Background] Notification:', title, message);
 
-// Create offscreen document on startup
-chrome.runtime.onStartup.addListener(async () => {
-    logger.log('Browser started');
-    await createOffscreenDocument();
-});
+        // For now, just log. In production, you might want to use chrome.notifications API
+        // or send to content script to show in-page notification
+    }
+}
 
-// Initialize immediately
-(async () => {
-    logger.log('Initializing background script');
-    await createOffscreenDocument();
-    logger.log('Background script ready');
-})();
+// Initialize the background service
+const backgroundService = new BackgroundService();
+
+console.log('[Background] WebWhispr background service loaded');
