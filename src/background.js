@@ -30,7 +30,7 @@ class BackgroundService {
                     break;
 
                 case 'AUDIO_RECORDED':
-                    this.handleAudioRecorded(message.audio);
+                    this.handleAudioRecorded(message);
                     break;
 
                 case 'RECORDING_ERROR':

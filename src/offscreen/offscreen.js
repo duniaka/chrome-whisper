@@ -130,8 +130,11 @@ class OffscreenManager {
         // Send audio to processor iframe for transcription
         if (this.processorIframe) {
             this.processorIframe.contentWindow.postMessage({
-                type: 'TRANSCRIBE',
-                audio: audioData
+                type: 'TRANSCRIBE_AUDIO',
+                data: {
+                    requestId: Date.now(),
+                    audio: audioData
+                }
             }, '*');
         }
     }
@@ -157,7 +160,7 @@ class OffscreenManager {
                 console.log('[Offscreen] Received transcription from processor');
                 chrome.runtime.sendMessage({
                     type: 'AUDIO_RECORDED',
-                    text: event.data.text
+                    text: event.data.data?.text || event.data.text
                 });
             }
         });
