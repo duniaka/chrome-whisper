@@ -1,16 +1,9 @@
 // WebWhispr Offscreen Document
-// Manages recording iframe and GitHub Pages processor iframe
+// Manages recording iframe
 
 class OffscreenManager {
     constructor() {
-        this.processorIframe = null;
         this.recordingIframe = null;
-        this.isProcessorReady = false;
-        this.pendingRequests = new Map(); // Track pending transcription requests
-        this.requestIdCounter = 0;
-
-        // GitHub Pages URL
-        this.PROCESSOR_URL = 'https://duniaka.github.io/chrome-whisper/github-pages/processor.html';
 
         this.init();
     }
@@ -19,9 +12,6 @@ class OffscreenManager {
         console.log('[Offscreen] Initializing...');
         this.setupMessageListeners();
         this.updateStatus('Offscreen initialized');
-
-        // Initialize processor immediately on load
-        this.initializeProcessor();
     }
 
     setupMessageListeners() {
@@ -40,11 +30,6 @@ class OffscreenManager {
                     sendResponse({ success: true });
                     break;
 
-                case 'INITIALIZE_PROCESSOR':
-                    this.initializeProcessor();
-                    sendResponse({ success: true });
-                    break;
-
                 default:
                     console.log('[Offscreen] Unknown message type:', message.type);
             }
@@ -52,14 +37,14 @@ class OffscreenManager {
             return true; // Keep channel open for async response
         });
 
-        // Listen for messages from iframes
+        // Listen for messages from recording iframe
         window.addEventListener('message', (event) => {
             this.handleIframeMessage(event);
         });
     }
 
     handleIframeMessage(event) {
-        // Handle messages from both recording and processor iframes
+        // Handle messages from recording iframe
         const { type, data } = event.data || {};
 
         console.log('[Offscreen] Iframe message:', type, 'from', event.origin);
@@ -85,32 +70,6 @@ class OffscreenManager {
                     type: 'RECORDING_ERROR',
                     error: data.error
                 });
-                break;
-
-            case 'PROCESSOR_READY':
-                console.log('[Offscreen] Processor iframe ready');
-                this.isProcessorReady = true;
-                this.updateStatus('Processor ready');
-                break;
-
-            case 'MODEL_PROGRESS':
-                console.log('[Offscreen] Model loading progress:', data.progress);
-                this.updateStatus(`Loading model: ${Math.round((data.progress?.progress || 0) * 100)}%`);
-                break;
-
-            case 'TRANSCRIPTION_RESULT':
-                console.log('[Offscreen] Transcription result received');
-                this.handleTranscriptionResult(data);
-                break;
-
-            case 'TRANSCRIPTION_ERROR':
-                console.error('[Offscreen] Transcription error:', data.error);
-                this.handleTranscriptionError(data);
-                break;
-
-            case 'PROCESSOR_ERROR':
-                console.error('[Offscreen] Processor error:', data.error);
-                this.updateStatus(`Processor error: ${data.error}`);
                 break;
         }
     }
@@ -176,115 +135,14 @@ class OffscreenManager {
         }
     }
 
-    initializeProcessor() {
-        console.log('[Offscreen] Initializing processor...');
-
-        if (!this.processorIframe) {
-            this.createProcessorIframe();
-        } else if (this.isProcessorReady) {
-            // Processor already ready
-            chrome.runtime.sendMessage({
-                type: 'PROCESSOR_INITIALIZED'
-            });
-        }
-    }
-
-    createProcessorIframe() {
-        console.log('[Offscreen] Creating processor iframe...');
-        this.updateStatus('Creating processor iframe...');
-
-        const container = document.getElementById('iframe-container');
-
-        // Create the iframe element
-        const iframe = document.createElement('iframe');
-        iframe.id = 'processor-iframe';
-        iframe.style.width = '100%';
-        iframe.style.height = '150px';
-        iframe.style.border = '1px solid #9999ff';
-        iframe.style.borderRadius = '4px';
-        iframe.style.marginBottom = '10px';
-
-        // Set the GitHub Pages URL
-        iframe.src = this.PROCESSOR_URL;
-
-        // Add to container
-        container.appendChild(iframe);
-        this.processorIframe = iframe;
-
-        this.updateStatus('Processor iframe created, waiting for initialization...');
-    }
-
     async handleAudioData(audioData) {
-        console.log('[Offscreen] Processing audio data...');
-        this.updateStatus('Sending audio to processor...');
+        console.log('[Offscreen] Received audio data');
+        this.updateStatus('Audio received, sending to background...');
 
-        // Ensure processor iframe exists (but don't wait for model to load)
-        if (!this.processorIframe) {
-            this.initializeProcessor();
-        }
-
-        // Generate request ID
-        const requestId = `req_${++this.requestIdCounter}`;
-
-        // Store pending request
-        this.pendingRequests.set(requestId, {
-            timestamp: Date.now(),
+        // Send audio directly to background script
+        chrome.runtime.sendMessage({
+            type: 'AUDIO_RECORDED',
             audio: audioData
-        });
-
-        // Send audio to processor iframe immediately
-        // The processor will queue it if model isn't ready yet
-        if (this.processorIframe) {
-            this.processorIframe.contentWindow.postMessage({
-                type: 'TRANSCRIBE_AUDIO',
-                data: {
-                    audio: audioData,
-                    requestId: requestId
-                }
-            }, '*');
-
-            this.updateStatus('Audio sent to processor' + (this.isProcessorReady ? ', transcribing...' : ', waiting for model to load...'));
-        } else {
-            console.error('[Offscreen] Processor iframe not available');
-            this.updateStatus('Error: Processor not available');
-        }
-    }
-
-    handleTranscriptionResult(data) {
-        console.log('[Offscreen] Handling transcription result:', data);
-
-        const { requestId, text } = data;
-
-        // Remove from pending requests
-        if (this.pendingRequests.has(requestId)) {
-            this.pendingRequests.delete(requestId);
-        }
-
-        this.updateStatus(`Transcription complete: "${text}"`);
-
-        // Send result to background script
-        chrome.runtime.sendMessage({
-            type: 'TRANSCRIPTION_COMPLETE',
-            text: text
-        });
-    }
-
-    handleTranscriptionError(data) {
-        console.error('[Offscreen] Transcription error:', data);
-
-        const { requestId, error } = data;
-
-        // Remove from pending requests
-        if (this.pendingRequests.has(requestId)) {
-            this.pendingRequests.delete(requestId);
-        }
-
-        this.updateStatus(`Transcription error: ${error}`);
-
-        // Send error to background script
-        chrome.runtime.sendMessage({
-            type: 'TRANSCRIPTION_ERROR',
-            error: error
         });
     }
 

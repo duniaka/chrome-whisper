@@ -36,12 +36,8 @@ class BackgroundService {
                     console.log('[Background] Offscreen document ready');
                     break;
 
-                case 'TRANSCRIPTION_COMPLETE':
-                    this.handleTranscriptionComplete(message.text);
-                    break;
-
-                case 'TRANSCRIPTION_ERROR':
-                    this.handleTranscriptionError(message.error);
+                case 'AUDIO_RECORDED':
+                    this.handleAudioRecorded(message.audio);
                     break;
 
                 case 'RECORDING_ERROR':
@@ -115,10 +111,14 @@ class BackgroundService {
         }
     }
 
-    async handleTranscriptionComplete(text) {
-        console.log('[Background] Transcription complete:', text);
+    async handleAudioRecorded(audioData) {
+        console.log('[Background] Audio recorded, length:', audioData.length);
 
-        // Send transcription to content script
+        // TODO: Process audio with Whisper
+        // For now, just send a placeholder
+        const text = '[Audio recorded - transcription not yet implemented]';
+
+        // Send to content script
         if (this.activeTabId) {
             try {
                 await chrome.tabs.sendMessage(this.activeTabId, {
@@ -126,33 +126,14 @@ class BackgroundService {
                     text: text
                 });
             } catch (error) {
-                console.error('[Background] Failed to send transcription to tab:', error);
-                this.showNotification('Transcription Complete', text);
+                console.error('[Background] Failed to send to tab:', error);
+                this.showNotification('Audio Recorded', 'Audio was recorded but could not be inserted');
             }
         }
 
         // Reset recording state
         this.isRecording = false;
         this.updateIcon(false);
-    }
-
-    handleTranscriptionError(error) {
-        console.error('[Background] Transcription error:', error);
-
-        // Notify user
-        this.showNotification('Transcription Error', error);
-
-        // Reset recording state
-        this.isRecording = false;
-        this.updateIcon(false);
-
-        // Notify content script
-        if (this.activeTabId) {
-            chrome.tabs.sendMessage(this.activeTabId, {
-                type: 'TRANSCRIPTION_ERROR',
-                error: error
-            });
-        }
     }
 
     handleRecordingError(error) {
