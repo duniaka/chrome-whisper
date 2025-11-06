@@ -51,7 +51,6 @@ class OffscreenManager {
         switch (type) {
             case 'RECORDING_READY':
                 console.log('[Offscreen] Recording iframe ready');
-                this.updateStatus('Recording ready');
                 break;
 
             case 'RECORDING_DATA':
