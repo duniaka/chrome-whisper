@@ -12,7 +12,7 @@
     "<all_urls>"
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; frame-src 'self' https://*.github.io;"
+    "extension_pages": "script-src 'self'; object-src 'self'; frame-src chrome-extension: https://*.github.io;"
   },
   "web_accessible_resources": [
     {
