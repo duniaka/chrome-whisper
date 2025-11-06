@@ -20,21 +20,39 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // Keyboard shortcut: Right Shift
+let isRecording = false;
+
 document.addEventListener('keydown', (event) => {
     // Right Shift key code is 16, shiftKey is true
     // We need to detect specifically the right shift
-    if (event.code === 'ShiftRight') {
+    if (event.code === 'ShiftRight' && !isRecording) {
         event.preventDefault();
         activeElement = document.activeElement;
 
         // Check if it's a text input field
         if (isTextInput(activeElement)) {
             console.log('[WebWhispr Content] Right Shift pressed, starting recording...');
+            isRecording = true;
             try {
                 chrome.runtime.sendMessage({ type: 'START_RECORDING' });
             } catch (error) {
                 console.error('[WebWhispr Content] Failed to send message:', error);
+                isRecording = false;
             }
+        }
+    }
+});
+
+document.addEventListener('keyup', (event) => {
+    // Stop recording when Right Shift is released
+    if (event.code === 'ShiftRight' && isRecording) {
+        event.preventDefault();
+        console.log('[WebWhispr Content] Right Shift released, stopping recording...');
+        isRecording = false;
+        try {
+            chrome.runtime.sendMessage({ type: 'STOP_RECORDING' });
+        } catch (error) {
+            console.error('[WebWhispr Content] Failed to send message:', error);
         }
     }
 });
