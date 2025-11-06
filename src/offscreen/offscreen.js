@@ -9,8 +9,8 @@ class OffscreenManager {
         this.pendingRequests = new Map(); // Track pending transcription requests
         this.requestIdCounter = 0;
 
-        // GitHub Pages URL - CHANGE THIS TO YOUR GITHUB PAGES URL
-        this.PROCESSOR_URL = 'https://YOUR_USERNAME.github.io/webwhispr-processor/processor.html';
+        // GitHub Pages URL
+        this.PROCESSOR_URL = 'https://duniaka.github.io/chrome-whisper/github-pages/processor.html';
 
         this.init();
     }
