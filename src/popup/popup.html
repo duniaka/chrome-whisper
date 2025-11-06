@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebWhispr Settings</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            width: 350px;
+            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+        }
+
+        h1 {
+            font-size: 1.3rem;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+
+        .subtitle {
+            font-size: 0.85rem;
+            color: #999;
+            margin-bottom: 1.5rem;
+        }
+
+        .setting-group {
+            margin-bottom: 1.5rem;
+        }
+
+        label {
+            display: block;
+            font-size: 0.85rem;
+            color: #aaa;
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 500;
+        }
+
+        select {
+            width: 100%;
+            padding: 0.75rem;
+            background: #2a2a2a;
+            border: 1px solid #333;
+            border-radius: 6px;
+            color: #fff;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        select:hover {
+            border-color: #444;
+            background: #2f2f2f;
+        }
+
+        select:focus {
+            outline: none;
+            border-color: #8b5cf6;
+        }
+
+        .hotkey-info {
+            background: #2a2a2a;
+            padding: 1rem;
+            border-radius: 6px;
+            border: 1px solid #333;
+            margin-top: 1.5rem;
+        }
+
+        .hotkey-info h3 {
+            font-size: 0.85rem;
+            color: #aaa;
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 500;
+        }
+
+        .hotkey-info p {
+            font-size: 0.9rem;
+            color: #fff;
+            margin-bottom: 0.75rem;
+        }
+
+        .hotkey-info kbd {
+            background: #1a1a1a;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            border: 1px solid #444;
+            font-family: monospace;
+            font-size: 0.85rem;
+        }
+
+        .hotkey-info small {
+            display: block;
+            color: #666;
+            font-size: 0.8rem;
+            margin-top: 0.5rem;
+        }
+
+        .status {
+            padding: 0.75rem;
+            border-radius: 6px;
+            margin-top: 1rem;
+            font-size: 0.85rem;
+            text-align: center;
+            display: none;
+        }
+
+        .status.show {
+            display: block;
+        }
+
+        .status.success {
+            background: #1f3d1f;
+            color: #4ade80;
+            border: 1px solid #2d5a2d;
+        }
+
+        .status.info {
+            background: #1f2d3d;
+            color: #60a5fa;
+            border: 1px solid #2d4159;
+        }
+
+        .model-info {
+            font-size: 0.8rem;
+            color: #666;
+            margin-top: 0.5rem;
+        }
+
+        .test-btn {
+            width: 100%;
+            padding: 12px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            margin-top: 15px;
+            transition: background 0.2s ease;
+        }
+
+        .test-btn:hover:not(:disabled) {
+            background: #5568d3;
+        }
+
+        .test-btn:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebWhispr</h1>
+    <p class="subtitle">Privacy-respecting voice input</p>
+
+    <div class="setting-group">
+        <label for="modelSize">Model Precision</label>
+        <select id="modelSize">
+            <option value="tiny">Tiny - Fastest (~75MB)</option>
+            <option value="base">Base - Balanced (~140MB)</option>
+            <option value="small" selected>Small - Accurate (~480MB)</option>
+        </select>
+        <div class="model-info">Higher precision = better accuracy but slower</div>
+    </div>
+
+    <div class="setting-group">
+        <label for="language">Language</label>
+        <select id="language">
+            <option value="en" selected>English</option>
+            <option value="multilingual">Auto-detect (Multilingual)</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="it">Italian</option>
+            <option value="pt">Portuguese</option>
+            <option value="nl">Dutch</option>
+            <option value="pl">Polish</option>
+            <option value="ru">Russian</option>
+            <option value="zh">Chinese</option>
+            <option value="ja">Japanese</option>
+            <option value="ko">Korean</option>
+        </select>
+    </div>
+
+    <div class="hotkey-info">
+        <h3>How to use</h3>
+        <p>Click any text field, then:</p>
+        <p><strong>Hold</strong> <kbd>Shift</kbd> for 0.5 seconds</p>
+        <small>Keep holding while speaking, release when done</small>
+    </div>
+
+    <button id="testMic" class="test-btn">
+        🎤 Test Microphone Permission
+    </button>
+
+    <div class="status" id="status"></div>
+
+    <script src="popup.js"></script>
+</body>
+</html>
