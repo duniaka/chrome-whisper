@@ -10,9 +10,13 @@ env.backends.onnx.wasm.numThreads = 4; // Use multi-threading for better perform
 
 let transcriber = null;
 let isInitialized = false;
+let initPromise = null;
 
 // Initialize the Whisper model
 async function initializeModel() {
+    if (initPromise) return initPromise;
+
+    initPromise = (async () => {
     try {
         console.log('[Processor] Initializing Whisper model...');
 
@@ -54,7 +58,11 @@ async function initializeModel() {
             type: 'PROCESSOR_ERROR',
             error: error.message
         }, '*');
+        throw error;
     }
+    })();
+
+    return initPromise;
 }
 
 // Process audio data
@@ -128,28 +136,29 @@ window.addEventListener('message', async (event) => {
 
         case 'TRANSCRIBE_AUDIO':
             console.log('[Processor] Received transcription request');
-            try {
-                if (!isInitialized) {
+            (async () => {
+                try {
+                    // Wait for initialization if needed
                     await initializeModel();
+
+                    const transcription = await transcribeAudio(data.audio);
+
+                    // Send result back to parent
+                    window.parent.postMessage({
+                        type: 'TRANSCRIPTION_RESULT',
+                        requestId: data.requestId,
+                        text: transcription
+                    }, '*');
+
+                } catch (error) {
+                    console.error('[Processor] Transcription error:', error);
+                    window.parent.postMessage({
+                        type: 'TRANSCRIPTION_ERROR',
+                        requestId: data.requestId,
+                        error: error.message
+                    }, '*');
                 }
-
-                const transcription = await transcribeAudio(data.audio);
-
-                // Send result back to parent
-                window.parent.postMessage({
-                    type: 'TRANSCRIPTION_RESULT',
-                    requestId: data.requestId,
-                    text: transcription
-                }, '*');
-
-            } catch (error) {
-                console.error('[Processor] Transcription error:', error);
-                window.parent.postMessage({
-                    type: 'TRANSCRIPTION_ERROR',
-                    requestId: data.requestId,
-                    error: error.message
-                }, '*');
-            }
+            })();
             break;
 
         case 'CHANGE_MODEL':
