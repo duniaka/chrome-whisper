@@ -12,8 +12,14 @@
     "<all_urls>"
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; frame-src https://*.github.io;"
+    "extension_pages": "script-src 'self'; object-src 'self'; frame-src 'self' https://*.github.io;"
   },
+  "web_accessible_resources": [
+    {
+      "resources": ["offscreen/recorder.html"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "background": {
     "service_worker": "background.js"
   },
