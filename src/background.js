@@ -176,21 +176,6 @@ class BackgroundService {
             });
 
             console.log('[Background] Offscreen document created');
-
-            // Wait for offscreen to be ready
-            await new Promise(resolve => {
-                const listener = (message) => {
-                    if (message.type === 'OFFSCREEN_READY') {
-                        chrome.runtime.onMessage.removeListener(listener);
-                        resolve();
-                    }
-                };
-                chrome.runtime.onMessage.addListener(listener);
-
-                // Timeout after 5 seconds
-                setTimeout(resolve, 5000);
-            });
-
         } catch (error) {
             console.error('[Background] Failed to create offscreen document:', error);
             throw error;
