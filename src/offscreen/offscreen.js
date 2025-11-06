@@ -19,6 +19,9 @@ class OffscreenManager {
         console.log('[Offscreen] Initializing...');
         this.setupMessageListeners();
         this.updateStatus('Offscreen initialized');
+
+        // Initialize processor immediately on load
+        this.initializeProcessor();
     }
 
     setupMessageListeners() {

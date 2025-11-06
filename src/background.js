@@ -75,18 +75,10 @@ class BackgroundService {
         this.activeTabId = tabId;
         this.isRecording = true;
 
-        // Ensure offscreen document exists
+        // Ensure offscreen document exists (processor will auto-initialize)
         await this.ensureOffscreenDocument();
 
-        // Initialize processor in offscreen
-        await this.sendToOffscreen({
-            type: 'INITIALIZE_PROCESSOR'
-        });
-
-        // Wait a bit for processor to initialize
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        // Start recording
+        // Start recording immediately
         await this.sendToOffscreen({
             type: 'START_RECORDING'
         });
