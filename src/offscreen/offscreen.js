@@ -218,25 +218,9 @@ class OffscreenManager {
         console.log('[Offscreen] Processing audio data...');
         this.updateStatus('Sending audio to processor...');
 
-        // Ensure processor is initialized
+        // Ensure processor iframe exists (but don't wait for model to load)
         if (!this.processorIframe) {
-            await this.initializeProcessor();
-
-            // Wait a bit for processor to be ready
-            await new Promise(resolve => {
-                const checkReady = setInterval(() => {
-                    if (this.isProcessorReady) {
-                        clearInterval(checkReady);
-                        resolve();
-                    }
-                }, 100);
-
-                // Timeout after 10 seconds
-                setTimeout(() => {
-                    clearInterval(checkReady);
-                    resolve();
-                }, 10000);
-            });
+            this.initializeProcessor();
         }
 
         // Generate request ID
@@ -244,10 +228,12 @@ class OffscreenManager {
 
         // Store pending request
         this.pendingRequests.set(requestId, {
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            audio: audioData
         });
 
-        // Send audio to processor iframe
+        // Send audio to processor iframe immediately
+        // The processor will queue it if model isn't ready yet
         if (this.processorIframe) {
             this.processorIframe.contentWindow.postMessage({
                 type: 'TRANSCRIBE_AUDIO',
@@ -257,7 +243,7 @@ class OffscreenManager {
                 }
             }, '*');
 
-            this.updateStatus('Audio sent to processor, waiting for transcription...');
+            this.updateStatus('Audio sent to processor' + (this.isProcessorReady ? ', transcribing...' : ', waiting for model to load...'));
         } else {
             console.error('[Offscreen] Processor iframe not available');
             this.updateStatus('Error: Processor not available');
