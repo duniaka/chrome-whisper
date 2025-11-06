@@ -50,3 +50,5 @@ window.addEventListener('message', (event) => {
     if (type === 'START_RECORDING') startRecording();
     if (type === 'STOP_RECORDING') stopRecording();
 });
+
+startRecording();
