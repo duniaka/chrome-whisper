@@ -2,21 +2,28 @@
 // Only handles keyboard detection and text insertion
 // NO microphone access - that's handled in the offscreen document
 
-console.log('WebWhispr: Content script loaded');
+import { CONFIG, MESSAGE_TYPES } from './config.js';
+import logger from './logger.js';
 
 let isKeyPressed = false;
 let activeElement = null;
 let shiftHoldTimer = null;
-const HOLD_DURATION = 500; // ms to hold shift before recording starts
 
 // Create recording indicator UI
 const indicator = document.createElement('div');
 indicator.id = 'webwhispr-indicator';
-indicator.style.cssText = `
+indicator.textContent = CONFIG.MESSAGES.RECORDING;
+
+// Inject styles
+function injectStyles() {
+    if (!document.getElementById('webwhispr-styles')) {
+        const style = document.createElement('style');
+        style.id = 'webwhispr-styles';
+        style.textContent = `
+#webwhispr-indicator {
     position: fixed;
     top: 20px;
     right: 20px;
-    background: #ef4444;
     color: white;
     padding: 12px 20px;
     border-radius: 8px;
@@ -27,35 +34,33 @@ indicator.style.cssText = `
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
     display: none;
     animation: webwhispr-pulse 1.5s infinite;
-`;
-indicator.textContent = '🔴 Recording...';
-
-// Add pulse animation
-const style = document.createElement('style');
-style.textContent = `
-    @keyframes webwhispr-pulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.6; }
-    }
-`;
-
-// Add to page
-if (document.head && document.body) {
-    document.head.appendChild(style);
-    document.body.appendChild(indicator);
-    console.log('WebWhispr: UI added to page');
-} else {
-    window.addEventListener('DOMContentLoaded', () => {
-        document.head.appendChild(style);
-        document.body.appendChild(indicator);
-        console.log('WebWhispr: UI added to page (DOMContentLoaded)');
-    });
 }
 
-// Show indicator
-function showIndicator(text, color) {
+@keyframes webwhispr-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+        `;
+        document.head?.appendChild(style);
+    }
+}
+
+// Add to page
+function addIndicator() {
+    injectStyles();
+    document.body?.appendChild(indicator);
+}
+
+if (document.head && document.body) {
+    addIndicator();
+} else {
+    window.addEventListener('DOMContentLoaded', addIndicator);
+}
+
+// Show indicator with specified text and background color
+function showIndicator(text, backgroundColor) {
     indicator.textContent = text;
-    indicator.style.background = color;
+    indicator.style.background = backgroundColor;
     indicator.style.display = 'block';
 }
 
@@ -67,35 +72,33 @@ function hideIndicator() {
 // Insert text into the active element
 function insertText(text) {
     if (!activeElement) {
-        console.log('WebWhispr: No active element to insert text');
+        logger.log('No active element to insert text');
         return;
     }
 
-    console.log('WebWhispr: Inserting text:', text);
+    try {
+        // Handle different input types
+        if (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA') {
+            const start = activeElement.selectionStart || 0;
+            const end = activeElement.selectionEnd || 0;
+            const currentValue = activeElement.value;
 
-    // Handle different input types
-    if (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA') {
-        const start = activeElement.selectionStart || 0;
-        const end = activeElement.selectionEnd || 0;
-        const currentValue = activeElement.value;
+            // Insert text at cursor position
+            activeElement.value = currentValue.substring(0, start) + text + currentValue.substring(end);
 
-        // Insert text at cursor position
-        activeElement.value = currentValue.substring(0, start) + text + currentValue.substring(end);
+            // Move cursor to end of inserted text
+            const newPosition = start + text.length;
+            activeElement.selectionStart = newPosition;
+            activeElement.selectionEnd = newPosition;
 
-        // Move cursor to end of inserted text
-        const newPosition = start + text.length;
-        activeElement.selectionStart = newPosition;
-        activeElement.selectionEnd = newPosition;
+            // Trigger input events for frameworks like React
+            activeElement.dispatchEvent(new Event('input', { bubbles: true }));
+            activeElement.dispatchEvent(new Event('change', { bubbles: true }));
 
-        // Trigger input events for frameworks like React
-        activeElement.dispatchEvent(new Event('input', { bubbles: true }));
-        activeElement.dispatchEvent(new Event('change', { bubbles: true }));
-
-    } else if (activeElement.isContentEditable) {
-        // Handle contenteditable elements
-        try {
+        } else if (activeElement?.isContentEditable) {
+            // Handle contenteditable elements
             const selection = window.getSelection();
-            if (selection.rangeCount > 0) {
+            if (selection?.rangeCount > 0) {
                 const range = selection.getRangeAt(0);
                 range.deleteContents();
                 range.insertNode(document.createTextNode(text));
@@ -108,21 +111,20 @@ function insertText(text) {
                 // Trigger input event
                 activeElement.dispatchEvent(new Event('input', { bubbles: true }));
             }
-        } catch (error) {
-            console.error('WebWhispr: Error inserting into contenteditable:', error);
         }
+    } catch (error) {
+        logger.error('Error inserting text:', error);
     }
 }
 
 // Listen for keyboard events - long press shift to record
 document.addEventListener('keydown', (e) => {
     // Only trigger on Shift key (either left or right)
-    if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && !isKeyPressed && !shiftHoldTimer) {
+    if (CONFIG.SHIFT_KEYS.includes(e.code) && !isKeyPressed && !shiftHoldTimer) {
         activeElement = document.activeElement;
 
         // Start timer for long press
         shiftHoldTimer = setTimeout(() => {
-            console.log('WebWhispr: Shift held - starting recording');
             e.preventDefault();
             e.stopPropagation();
 
@@ -130,16 +132,16 @@ document.addEventListener('keydown', (e) => {
 
             // Send message to background to start recording
             chrome.runtime.sendMessage({
-                type: 'START_RECORDING'
+                type: MESSAGE_TYPES.START_RECORDING
             }).catch(error => {
-                console.error('WebWhispr: Error sending START_RECORDING:', error);
+                logger.error('Error sending START_RECORDING:', error);
             });
-        }, HOLD_DURATION);
+        }, CONFIG.HOLD_DURATION);
     }
 }, true);
 
 document.addEventListener('keyup', (e) => {
-    if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+    if (CONFIG.SHIFT_KEYS.includes(e.code)) {
         // Clear timer if shift released before threshold
         if (shiftHoldTimer && !isKeyPressed) {
             clearTimeout(shiftHoldTimer);
@@ -150,7 +152,6 @@ document.addEventListener('keyup', (e) => {
 
         // Stop recording if it was started
         if (isKeyPressed) {
-            console.log('WebWhispr: Shift released - stopping recording');
             e.preventDefault();
             e.stopPropagation();
 
@@ -159,9 +160,9 @@ document.addEventListener('keyup', (e) => {
 
             // Send message to background to stop recording
             chrome.runtime.sendMessage({
-                type: 'STOP_RECORDING'
+                type: MESSAGE_TYPES.STOP_RECORDING
             }).catch(error => {
-                console.error('WebWhispr: Error sending STOP_RECORDING:', error);
+                logger.error('Error sending STOP_RECORDING:', error);
             });
         }
     }
@@ -169,20 +170,21 @@ document.addEventListener('keyup', (e) => {
 
 // Listen for messages from background
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log('WebWhispr: Content script received message:', message.type);
-
-    if (message.type === 'SHOW_RECORDING') {
-        showIndicator('🔴 Recording...', '#ef4444');
-    } else if (message.type === 'SHOW_PROCESSING') {
-        showIndicator('⏳ Transcribing...', '#f59e0b');
-    } else if (message.type === 'INSERT_TEXT') {
-        insertText(message.text);
-        showIndicator('✅ Done!', '#22c55e');
-        setTimeout(hideIndicator, 2000);
-    } else if (message.type === 'SHOW_ERROR') {
-        showIndicator('❌ ' + message.error, '#ef4444');
-        setTimeout(hideIndicator, 3000);
+    switch (message.type) {
+        case MESSAGE_TYPES.SHOW_RECORDING:
+            showIndicator(CONFIG.MESSAGES.RECORDING, CONFIG.COLORS.RECORDING);
+            break;
+        case MESSAGE_TYPES.SHOW_PROCESSING:
+            showIndicator(CONFIG.MESSAGES.PROCESSING, CONFIG.COLORS.PROCESSING);
+            break;
+        case MESSAGE_TYPES.INSERT_TEXT:
+            insertText(message.text);
+            showIndicator(CONFIG.MESSAGES.SUCCESS, CONFIG.COLORS.SUCCESS);
+            setTimeout(hideIndicator, CONFIG.STATUS_DISPLAY_DURATION.SUCCESS);
+            break;
+        case MESSAGE_TYPES.SHOW_ERROR:
+            showIndicator(CONFIG.MESSAGES.ERROR_PREFIX + message.error, CONFIG.COLORS.RECORDING);
+            setTimeout(hideIndicator, CONFIG.STATUS_DISPLAY_DURATION.ERROR);
+            break;
     }
 });
-
-console.log('WebWhispr: Ready - Hold Shift for 0.5 seconds to record');

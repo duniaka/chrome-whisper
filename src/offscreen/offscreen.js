@@ -1,15 +1,14 @@
 // Offscreen document for WebWhispr
 // Handles audio recording and transcription in extension context
 
-console.log('WebWhispr: Offscreen document loaded');
-
-// Import bundled Transformers.js with all model implementations
-import { pipeline } from '../transformers.min.js';
+import { pipeline } from '@xenova/transformers';
+import { CONFIG, MESSAGE_TYPES } from '../config.js';
+import logger from '../logger.js';
 
 let transcriber = null;
 let isRecording = false;
-let modelSize = 'small';
-let language = 'en';
+let modelSize = CONFIG.DEFAULTS.MODEL_SIZE;
+let language = CONFIG.DEFAULTS.LANGUAGE;
 let settingsLoaded = false;
 let recorderIframe = null;
 
@@ -19,12 +18,12 @@ async function loadSettings() {
 
     return new Promise((resolve) => {
         // Request settings from background script
-        chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (response) => {
+        chrome.runtime.sendMessage({ type: MESSAGE_TYPES.GET_SETTINGS }, (response) => {
             if (response) {
-                modelSize = response.modelSize || 'small';
-                language = response.language || 'en';
+                modelSize = response.modelSize || CONFIG.DEFAULTS.MODEL_SIZE;
+                language = response.language || CONFIG.DEFAULTS.LANGUAGE;
                 settingsLoaded = true;
-                console.log('WebWhispr: Settings loaded:', { modelSize, language });
+                logger.log('Settings loaded:', { modelSize, language });
             }
             resolve();
         });
@@ -36,61 +35,55 @@ async function loadModel() {
     await loadSettings();
 
     const modelName = language === 'en' || language === 'multilingual'
-        ? `Xenova/whisper-${modelSize}${language === 'en' ? '.en' : ''}`
-        : `Xenova/whisper-${modelSize}`;
+        ? `${CONFIG.MODEL_PREFIX}${modelSize}${language === 'en' ? '.en' : ''}`
+        : `${CONFIG.MODEL_PREFIX}${modelSize}`;
 
-    console.log('WebWhispr: Loading model:', modelName);
-    console.log('WebWhispr: Settings:', { modelSize, language });
-    console.log('WebWhispr: Creating pipeline for automatic-speech-recognition...');
+    logger.log('Loading model:', modelName);
 
     try {
         transcriber = await pipeline('automatic-speech-recognition', modelName, {
             progress_callback: (progress) => {
-                console.log('WebWhispr: Progress:', progress);
                 if (progress.status === 'downloading') {
                     const percent = Math.round(progress.progress || 0);
-                    console.log(`WebWhispr: Downloading model... ${percent}%`);
+                    logger.log(`Downloading model... ${percent}%`);
                     // Send progress to background
                     chrome.runtime.sendMessage({
-                        type: 'MODEL_PROGRESS',
+                        type: MESSAGE_TYPES.MODEL_PROGRESS,
                         progress: percent,
                         status: 'downloading'
-                    });
+                    }).catch(() => {});
                 } else if (progress.status === 'loading') {
-                    console.log('WebWhispr: Loading model files...');
+                    logger.log('Loading model files...');
                 } else if (progress.status === 'ready') {
-                    console.log('WebWhispr: Model ready!');
+                    logger.log('Model ready');
                 }
             }
         });
-        console.log('WebWhispr: Pipeline created successfully');
+        logger.log('Pipeline created successfully');
     } catch (error) {
-        console.error('WebWhispr: Error creating pipeline:', error);
-        console.error('WebWhispr: Error name:', error.name);
-        console.error('WebWhispr: Error message:', error.message);
-        console.error('WebWhispr: Error stack:', error.stack);
+        logger.error('Error creating pipeline:', error.message);
         throw error;
     }
 
-    console.log('WebWhispr: Model loaded successfully');
+    logger.log('Model loaded successfully');
     chrome.runtime.sendMessage({
-        type: 'MODEL_READY'
-    });
+        type: MESSAGE_TYPES.MODEL_READY
+    }).catch(() => {});
 }
 
 // Start recording
 async function startRecording() {
     if (isRecording) {
-        console.log('WebWhispr: Already recording');
+        logger.log('Already recording');
         return;
     }
 
-    console.log('WebWhispr: Creating recorder iframe...');
+    logger.log('Creating recorder iframe');
     isRecording = true;
 
     // Create iframe for recording
     recorderIframe = document.createElement('iframe');
-    recorderIframe.src = 'recorder.html';
+    recorderIframe.src = CONFIG.RECORDER_HTML;
     recorderIframe.style.display = 'none';
     document.body.appendChild(recorderIframe);
 
@@ -99,32 +92,30 @@ async function startRecording() {
         recorderIframe.onload = resolve;
     });
 
-    console.log('WebWhispr: Recorder iframe loaded, starting recording...');
+    logger.log('Recorder iframe loaded, starting recording');
 
     // Send start command to iframe
-    recorderIframe.contentWindow.postMessage({ type: 'START_RECORDING' }, '*');
+    recorderIframe.contentWindow.postMessage({ type: MESSAGE_TYPES.RECORDER_START }, '*');
 }
 
 // Stop recording
 function stopRecording() {
-    console.log('WebWhispr: stopRecording called, isRecording:', isRecording);
-
     if (!isRecording) {
-        console.log('WebWhispr: Not recording');
+        logger.log('Not recording');
         return;
     }
 
-    console.log('WebWhispr: Stopping recording in iframe...');
+    logger.log('Stopping recording in iframe');
 
-    if (recorderIframe) {
-        recorderIframe.contentWindow.postMessage({ type: 'STOP_RECORDING' }, '*');
+    if (recorderIframe?.contentWindow) {
+        recorderIframe.contentWindow.postMessage({ type: MESSAGE_TYPES.RECORDER_STOP }, '*');
     }
 }
 
 // Destroy iframe and release all resources
 function destroyRecorderIframe() {
     if (recorderIframe) {
-        console.log('WebWhispr: Destroying recorder iframe to fully release microphone');
+        logger.log('Destroying recorder iframe to release microphone');
         recorderIframe.remove();
         recorderIframe = null;
     }
@@ -135,15 +126,15 @@ async function transcribeAudio(audioBlob) {
     try {
         // Ensure model is loaded
         if (!transcriber) {
-            console.log('WebWhispr: Model not loaded, loading now...');
+            logger.log('Model not loaded, loading now');
             await loadModel();
         }
 
-        console.log('WebWhispr: Transcribing audio...');
+        logger.log('Transcribing audio');
 
         // Convert blob to audio buffer
         const arrayBuffer = await audioBlob.arrayBuffer();
-        const audioContext = new AudioContext({ sampleRate: 16000 });
+        const audioContext = new AudioContext({ sampleRate: CONFIG.SAMPLE_RATE });
         const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
         // Get mono audio
@@ -166,110 +157,116 @@ async function transcribeAudio(audioBlob) {
                 ? { language: language }
                 : {};
 
-        console.log('WebWhispr: Running transcription...');
+        logger.log('Running transcription');
         const result = await transcriber(audio, options);
 
         if (result && result.text) {
             const text = result.text.trim();
-            console.log('WebWhispr: Transcription complete:', text);
+            logger.log('Transcription complete:', text);
 
             // Send result to background
             chrome.runtime.sendMessage({
-                type: 'TRANSCRIPTION_COMPLETE',
+                type: MESSAGE_TYPES.TRANSCRIPTION_COMPLETE,
                 text: text
-            });
+            }).catch(() => {});
         } else {
-            console.log('WebWhispr: No speech detected');
+            logger.log('No speech detected');
             chrome.runtime.sendMessage({
-                type: 'ERROR',
+                type: MESSAGE_TYPES.ERROR,
                 error: 'No speech detected'
-            });
+            }).catch(() => {});
         }
 
     } catch (error) {
-        console.error('WebWhispr: Transcription error:', error);
+        logger.error('Transcription error:', error.message);
         chrome.runtime.sendMessage({
-            type: 'ERROR',
+            type: MESSAGE_TYPES.ERROR,
             error: error.message
-        });
+        }).catch(() => {});
     }
 }
 
 // Listen for messages from background
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log('WebWhispr: Offscreen received message:', message.type, 'from:', sender);
+    switch (message.type) {
+        case MESSAGE_TYPES.START_RECORDING:
+            startRecording();
+            sendResponse({ received: true });
+            break;
 
-    if (message.type === 'START_RECORDING') {
-        console.log('WebWhispr: Processing START_RECORDING');
-        startRecording();
-        sendResponse({ received: true });
-    } else if (message.type === 'STOP_RECORDING') {
-        console.log('WebWhispr: Processing STOP_RECORDING');
-        stopRecording();
-        sendResponse({ received: true });
-    } else if (message.type === 'LOAD_MODEL') {
-        console.log('WebWhispr: Processing LOAD_MODEL');
-        loadModel().then(() => {
-            sendResponse({ success: true });
-        }).catch(error => {
-            sendResponse({ success: false, error: error.message });
-        });
-        return true; // Keep channel open for async response
-    } else if (message.type === 'RELOAD_MODEL') {
-        console.log('WebWhispr: Processing RELOAD_MODEL');
-        transcriber = null; // Force reload on next use
-        settingsLoaded = false; // Force reload settings
-        sendResponse({ received: true });
+        case MESSAGE_TYPES.STOP_RECORDING:
+            stopRecording();
+            sendResponse({ received: true });
+            break;
+
+        case MESSAGE_TYPES.LOAD_MODEL:
+            loadModel().then(() => {
+                sendResponse({ success: true });
+            }).catch(error => {
+                sendResponse({ success: false, error: error.message });
+            });
+            return true; // Keep channel open for async response
+
+        case MESSAGE_TYPES.RELOAD_MODEL:
+            transcriber = null; // Force reload on next use
+            settingsLoaded = false; // Force reload settings
+            sendResponse({ received: true });
+            break;
     }
 });
 
 // Listen for messages from recorder iframe
 window.addEventListener('message', async (event) => {
-    console.log('WebWhispr: Received message from iframe:', event.data.type);
-
-    if (event.data.type === 'RECORDING_STARTED') {
-        // Notify background that recording started
-        chrome.runtime.sendMessage({
-            type: 'RECORDING_STARTED'
-        });
-    } else if (event.data.type === 'RECORDING_COMPLETE') {
-        isRecording = false;
-
-        // Destroy iframe immediately to release microphone
-        destroyRecorderIframe();
-
-        // Notify that we're processing
-        chrome.runtime.sendMessage({
-            type: 'PROCESSING'
-        });
-
-        // Convert arrayBuffer to blob and transcribe
-        const audioBlob = new Blob([event.data.audioData], { type: 'audio/webm' });
-        await transcribeAudio(audioBlob);
-
-    } else if (event.data.type === 'RECORDING_ERROR') {
-        isRecording = false;
-        destroyRecorderIframe();
-
-        let errorMessage = event.data.error || 'Microphone access denied';
-
-        if (errorMessage.includes('Permission denied') || errorMessage.includes('NotAllowedError')) {
-            errorMessage = 'Opening mic settings...';
+    switch (event.data.type) {
+        case MESSAGE_TYPES.RECORDER_STARTED:
+            // Notify background that recording started
             chrome.runtime.sendMessage({
-                type: 'OPEN_MIC_SETTINGS'
-            });
-        }
+                type: MESSAGE_TYPES.RECORDING_STARTED
+            }).catch(() => {});
+            break;
 
-        chrome.runtime.sendMessage({
-            type: 'ERROR',
-            error: errorMessage
-        });
+        case MESSAGE_TYPES.RECORDER_COMPLETE:
+            isRecording = false;
+
+            // Destroy iframe immediately to release microphone
+            destroyRecorderIframe();
+
+            // Notify that we're processing
+            chrome.runtime.sendMessage({
+                type: MESSAGE_TYPES.PROCESSING
+            }).catch(() => {});
+
+            // Convert arrayBuffer to blob and transcribe
+            const audioBlob = new Blob([event.data.audioData], { type: CONFIG.AUDIO_TYPE });
+            await transcribeAudio(audioBlob);
+            break;
+
+        case MESSAGE_TYPES.RECORDER_ERROR:
+            isRecording = false;
+            destroyRecorderIframe();
+
+            let errorMessage = event.data.error || 'Microphone access denied';
+
+            if (errorMessage.includes('Permission denied') || errorMessage.includes('NotAllowedError')) {
+                errorMessage = 'Opening mic settings...';
+                chrome.runtime.sendMessage({
+                    type: MESSAGE_TYPES.OPEN_MIC_SETTINGS
+                }).catch(() => {});
+            }
+
+            chrome.runtime.sendMessage({
+                type: MESSAGE_TYPES.ERROR,
+                error: errorMessage
+            }).catch(() => {});
+            break;
     }
 });
 
-console.log('WebWhispr: Offscreen document ready and listening for messages');
+logger.log('Offscreen document ready and listening for messages');
 
 // Load settings on startup
 loadSettings().then(() => {
-    console.log('WebWhispr: Initial settings loaded');
+    logger.log('Initial settings loaded');
+}).catch(error => {
+    logger.error('Error loading settings:', error.message);
 });

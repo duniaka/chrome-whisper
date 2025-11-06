@@ -1,5 +1,6 @@
 // Audio recorder for iframe
-console.log('WebWhispr: Recorder iframe loaded');
+import { CONFIG, MESSAGE_TYPES } from '../config.js';
+import logger from '../logger.js';
 
 let mediaRecorder = null;
 let audioChunks = [];
@@ -7,20 +8,14 @@ let stream = null;
 
 // Listen for commands from parent
 window.addEventListener('message', async (event) => {
-    console.log('WebWhispr: Recorder received message:', event.data.type);
-
-    if (event.data.type === 'START_RECORDING') {
+    if (event.data.type === MESSAGE_TYPES.RECORDER_START) {
         try {
-            console.log('WebWhispr: Requesting microphone in iframe...');
+            logger.log('Requesting microphone in iframe');
             stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true
-                }
+                audio: CONFIG.AUDIO_CONSTRAINTS
             });
 
-            console.log('WebWhispr: Got stream in iframe');
+            logger.log('Got stream in iframe');
             audioChunks = [];
             mediaRecorder = new MediaRecorder(stream);
 
@@ -29,15 +24,13 @@ window.addEventListener('message', async (event) => {
             };
 
             mediaRecorder.onstop = async () => {
-                console.log('WebWhispr: Recording stopped in iframe');
-                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                logger.log('Recording stopped in iframe');
+                const audioBlob = new Blob(audioChunks, { type: CONFIG.AUDIO_TYPE });
 
-                // Stop all tracks IMMEDIATELY
-                console.log('WebWhispr: Stopping tracks in iframe...');
+                // Stop all tracks immediately to release microphone
+                logger.log('Stopping tracks in iframe');
                 stream.getTracks().forEach(track => {
-                    console.log('WebWhispr: Track state before stop:', track.readyState);
                     track.stop();
-                    console.log('WebWhispr: Track state after stop:', track.readyState);
                 });
                 stream = null;
                 mediaRecorder = null;
@@ -45,30 +38,30 @@ window.addEventListener('message', async (event) => {
                 // Send audio blob to parent
                 const arrayBuffer = await audioBlob.arrayBuffer();
                 window.parent.postMessage({
-                    type: 'RECORDING_COMPLETE',
+                    type: MESSAGE_TYPES.RECORDER_COMPLETE,
                     audioData: arrayBuffer
                 }, '*');
             };
 
             mediaRecorder.start();
-            console.log('WebWhispr: Recording started in iframe');
+            logger.log('Recording started in iframe');
 
             // Notify parent
-            window.parent.postMessage({ type: 'RECORDING_STARTED' }, '*');
+            window.parent.postMessage({ type: MESSAGE_TYPES.RECORDER_STARTED }, '*');
 
         } catch (error) {
-            console.error('WebWhispr: Microphone error in iframe:', error);
+            logger.error('Microphone error in iframe:', error.message);
             window.parent.postMessage({
-                type: 'RECORDING_ERROR',
+                type: MESSAGE_TYPES.RECORDER_ERROR,
                 error: error.message
             }, '*');
         }
-    } else if (event.data.type === 'STOP_RECORDING') {
+    } else if (event.data.type === MESSAGE_TYPES.RECORDER_STOP) {
         if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-            console.log('WebWhispr: Stopping recording in iframe...');
+            logger.log('Stopping recording in iframe');
             mediaRecorder.stop();
         }
     }
 });
 
-console.log('WebWhispr: Recorder iframe ready');
+logger.log('Recorder iframe ready');

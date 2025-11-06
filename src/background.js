@@ -1,9 +1,12 @@
 // Background service worker for WebWhispr
 
-console.log('WebWhispr: Background script loaded');
+import { CONFIG, MESSAGE_TYPES } from './config.js';
+import logger from './logger.js';
+import InitializationManager from './initializationManager.js';
 
 let offscreenDocumentCreated = false;
 let settingsOpenedTimestamp = 0;
+const offscreenInitManager = new InitializationManager();
 
 // Create offscreen document for audio processing
 async function createOffscreenDocument() {
@@ -13,227 +16,179 @@ async function createOffscreenDocument() {
     });
 
     if (existingContexts.length > 0) {
-        console.log('WebWhispr: Offscreen document already exists');
         offscreenDocumentCreated = true;
         return;
     }
 
     try {
         await chrome.offscreen.createDocument({
-            url: 'offscreen/offscreen.html',
+            url: CONFIG.OFFSCREEN_HTML,
             reasons: ['USER_MEDIA'],
             justification: 'Recording audio for speech-to-text transcription'
         });
         offscreenDocumentCreated = true;
-        console.log('WebWhispr: Offscreen document created successfully');
+        logger.log('Offscreen document created');
     } catch (error) {
         if (error.message.includes('Only a single offscreen')) {
             // Already exists, that's fine
             offscreenDocumentCreated = true;
-            console.log('WebWhispr: Offscreen document already exists (ok)');
         } else {
-            console.error('WebWhispr: Failed to create offscreen document:', error);
+            logger.error('Failed to create offscreen document:', error);
             offscreenDocumentCreated = false;
+            throw error;
         }
     }
 }
 
-// Ensure offscreen document exists
+// Ensure offscreen document exists using initialization manager
 async function ensureOffscreenDocument() {
-    if (!offscreenDocumentCreated) {
-        await createOffscreenDocument();
-    }
+    return offscreenInitManager.initialize(createOffscreenDocument);
 }
 
-// Handle messages from content scripts, popup, and offscreen document
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log('WebWhispr: Background received message:', message.type);
+// Helper function to safely send message to active tab
+function sendToActiveTab(message) {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs?.[0]?.id) {
+            chrome.tabs.sendMessage(tabs[0].id, message).catch(() => {});
+        }
+    });
+}
 
-    // From popup: Get settings
-    if (message.type === 'GET_SETTINGS') {
+// Message handlers organized by source
+const messageHandlers = {
+    // Popup handlers
+    [MESSAGE_TYPES.GET_SETTINGS]: (message, sender, sendResponse) => {
         chrome.storage.sync.get(['modelSize', 'language'], (result) => {
             sendResponse({
-                modelSize: result.modelSize || 'small',
-                language: result.language || 'en'
+                modelSize: result.modelSize || CONFIG.DEFAULTS.MODEL_SIZE,
+                language: result.language || CONFIG.DEFAULTS.LANGUAGE
             });
         });
         return true;
-    }
+    },
 
-    // From popup: Model or language changed
-    if (message.type === 'MODEL_CHANGED' || message.type === 'LANGUAGE_CHANGED') {
-        // Notify offscreen to reload model
+    [MESSAGE_TYPES.MODEL_CHANGED]: () => {
         if (offscreenDocumentCreated) {
-            chrome.runtime.sendMessage({
-                type: 'RELOAD_MODEL'
-            }).catch(() => {});
+            chrome.runtime.sendMessage({ type: MESSAGE_TYPES.RELOAD_MODEL }).catch(() => {});
         }
-        return;
-    }
+    },
 
-    // From popup: Test microphone
-    if (message.type === 'TEST_MIC') {
-        console.log('WebWhispr: TEST_MIC from popup');
-        ensureOffscreenDocument().then(() => {
-            setTimeout(() => {
-                chrome.runtime.sendMessage({
-                    type: 'START_RECORDING'
-                }).catch(error => {
-                    console.error('WebWhispr: Error in test:', error);
-                });
-            }, 100);
-        });
-        return;
-    }
-
-    // From popup: Stop test
-    if (message.type === 'STOP_TEST') {
+    [MESSAGE_TYPES.LANGUAGE_CHANGED]: () => {
         if (offscreenDocumentCreated) {
-            chrome.runtime.sendMessage({
-                type: 'STOP_RECORDING'
-            }).catch(() => {});
+            chrome.runtime.sendMessage({ type: MESSAGE_TYPES.RELOAD_MODEL }).catch(() => {});
         }
-        return;
-    }
+    },
 
-    // From content script: Start recording
-    if (message.type === 'START_RECORDING' && sender.tab) {
-        console.log('WebWhispr: START_RECORDING from content script');
-        ensureOffscreenDocument().then(() => {
-            // Give offscreen document a moment to initialize
-            setTimeout(() => {
-                // Forward to offscreen document
-                chrome.runtime.sendMessage({
-                    type: 'START_RECORDING'
-                }).catch(error => {
-                    console.error('WebWhispr: Error starting recording:', error);
-                });
-            }, 100);
-        });
-        return;
-    }
+    [MESSAGE_TYPES.TEST_MIC]: () => {
+        ensureOffscreenDocument()
+            .then(() => chrome.runtime.sendMessage({ type: MESSAGE_TYPES.START_RECORDING }))
+            .catch(error => logger.error('Error in test:', error));
+    },
 
-    // From content script: Stop recording
-    if (message.type === 'STOP_RECORDING' && sender.tab) {
-        console.log('WebWhispr: STOP_RECORDING from content script');
+    [MESSAGE_TYPES.STOP_TEST]: () => {
         if (offscreenDocumentCreated) {
-            chrome.runtime.sendMessage({
-                type: 'STOP_RECORDING'
-            }).catch(error => {
-                console.error('WebWhispr: Error stopping recording:', error);
+            chrome.runtime.sendMessage({ type: MESSAGE_TYPES.STOP_RECORDING }).catch(() => {});
+        }
+    },
+
+    // Content script handlers
+    [`${MESSAGE_TYPES.START_RECORDING}:tab`]: () => {
+        ensureOffscreenDocument()
+            .then(() => chrome.runtime.sendMessage({ type: MESSAGE_TYPES.START_RECORDING }))
+            .catch(error => logger.error('Error starting recording:', error));
+    },
+
+    [`${MESSAGE_TYPES.STOP_RECORDING}:tab`]: () => {
+        if (offscreenDocumentCreated) {
+            chrome.runtime.sendMessage({ type: MESSAGE_TYPES.STOP_RECORDING }).catch(error => {
+                logger.error('Error stopping recording:', error);
             });
         }
-        return;
-    }
+    },
 
-    // From offscreen: Recording started
-    if (message.type === 'RECORDING_STARTED') {
-        // Notify content script to show indicator
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            if (tabs[0]) {
-                chrome.tabs.sendMessage(tabs[0].id, {
-                    type: 'SHOW_RECORDING'
-                }).catch(() => {});
-            }
+    // Offscreen handlers
+    [MESSAGE_TYPES.RECORDING_STARTED]: () => {
+        sendToActiveTab({ type: MESSAGE_TYPES.SHOW_RECORDING });
+    },
+
+    [MESSAGE_TYPES.PROCESSING]: () => {
+        sendToActiveTab({ type: MESSAGE_TYPES.SHOW_PROCESSING });
+    },
+
+    [MESSAGE_TYPES.TRANSCRIPTION_COMPLETE]: (message) => {
+        sendToActiveTab({
+            type: MESSAGE_TYPES.INSERT_TEXT,
+            text: message.text
         });
-        return;
-    }
+    },
 
-    // From offscreen: Processing
-    if (message.type === 'PROCESSING') {
-        // Notify content script
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            if (tabs[0]) {
-                chrome.tabs.sendMessage(tabs[0].id, {
-                    type: 'SHOW_PROCESSING'
-                }).catch(() => {});
-            }
+    [MESSAGE_TYPES.ERROR]: (message) => {
+        sendToActiveTab({
+            type: MESSAGE_TYPES.SHOW_ERROR,
+            error: message.error
         });
-        return;
-    }
+    },
 
-    // From offscreen: Transcription complete
-    if (message.type === 'TRANSCRIPTION_COMPLETE') {
-        // Send text to content script for insertion
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            if (tabs[0]) {
-                chrome.tabs.sendMessage(tabs[0].id, {
-                    type: 'INSERT_TEXT',
-                    text: message.text
-                }).catch(() => {});
-            }
-        });
-        return;
-    }
-
-    // From offscreen: Error
-    if (message.type === 'ERROR') {
-        // Notify content script
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            if (tabs[0]) {
-                chrome.tabs.sendMessage(tabs[0].id, {
-                    type: 'SHOW_ERROR',
-                    error: message.error
-                }).catch(() => {});
-            }
-        });
-        return;
-    }
-
-    // From offscreen: Open mic settings
-    if (message.type === 'OPEN_MIC_SETTINGS') {
+    [MESSAGE_TYPES.OPEN_MIC_SETTINGS]: () => {
         // Prevent duplicate opens within 2 seconds
         const now = Date.now();
-        if (now - settingsOpenedTimestamp > 2000) {
+        if (now - settingsOpenedTimestamp > CONFIG.SETTINGS_DEBOUNCE) {
             settingsOpenedTimestamp = now;
             chrome.tabs.create({
-                url: `chrome://settings/content/siteDetails?site=chrome-extension://${chrome.runtime.id}`
+                url: `chrome://settings/content/siteDetails?site=${CONFIG.EXTENSION_ID_PATH}`
             });
         }
-        return;
-    }
+    },
 
-    // From offscreen: Model progress
-    if (message.type === 'MODEL_PROGRESS') {
-        // Could notify popup or content script about download progress
-        console.log(`WebWhispr: Model ${message.status} ${message.progress}%`);
-        return;
-    }
+    [MESSAGE_TYPES.MODEL_PROGRESS]: (message) => {
+        logger.log(`Model ${message.status} ${message.progress}%`);
+    },
 
-    // From offscreen: Model ready
-    if (message.type === 'MODEL_READY') {
-        console.log('WebWhispr: Model is ready');
-        return;
-    }
+    [MESSAGE_TYPES.MODEL_READY]: () => {
+        logger.log('Model ready');
+    },
 
-    // From offscreen: Close offscreen document
-    if (message.type === 'CLOSE_OFFSCREEN') {
-        console.log('WebWhispr: Closing offscreen document to release microphone');
+    [MESSAGE_TYPES.CLOSE_OFFSCREEN]: () => {
         chrome.offscreen.closeDocument().then(() => {
-            console.log('WebWhispr: Offscreen document closed');
             offscreenDocumentCreated = false;
         }).catch(error => {
-            console.error('WebWhispr: Error closing offscreen document:', error);
+            logger.error('Error closing offscreen document:', error);
         });
-        return;
+    }
+};
+
+// Main message handler
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    // Determine handler key based on message type and sender
+    let handlerKey = message.type;
+    if (sender.tab) {
+        handlerKey = `${message.type}:tab`;
+    }
+
+    const handler = messageHandlers[handlerKey] || messageHandlers[message.type];
+
+    if (handler) {
+        const result = handler(message, sender, sendResponse);
+        // If handler returns true, response is async
+        if (result === true) return true;
     }
 });
 
 // Create offscreen document on installation
 chrome.runtime.onInstalled.addListener(async () => {
-    console.log('WebWhispr: Extension installed/updated');
+    logger.log('Extension installed/updated');
     await createOffscreenDocument();
 });
 
 // Create offscreen document on startup
 chrome.runtime.onStartup.addListener(async () => {
-    console.log('WebWhispr: Browser started');
+    logger.log('Browser started');
     await createOffscreenDocument();
 });
 
 // Initialize immediately
 (async () => {
-    console.log('WebWhispr: Initializing...');
+    logger.log('Initializing background script');
     await createOffscreenDocument();
-    console.log('WebWhispr: Background script ready');
+    logger.log('Background script ready');
 })();
