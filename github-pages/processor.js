@@ -23,7 +23,7 @@ async function initializeModel() {
         // Create the transcription pipeline
         transcriber = await pipeline(
             'automatic-speech-recognition',
-            'Xenova/whisper-tiny', // Using tiny model for faster loading
+            'Xenova/whisper-small', // Using small model for better accuracy
             {
                 // Model options
                 revision: 'main',
@@ -96,10 +96,11 @@ async function transcribeAudio(audioData) {
         // Perform transcription
         const result = await transcriber(audioUrl, {
             // Transcription options
-            language: 'en', // Default to English
+            language: 'en', // English only
             task: 'transcribe',
             chunk_length_s: 30, // Process in 30-second chunks
-            return_timestamps: false // We just need the text
+            return_timestamps: false, // We just need the text
+            force_tokens: null
         });
 
         // Clean up
