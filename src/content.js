@@ -1,83 +1,62 @@
-// WebWhispr Content Script - Hotkey and text insertion
+// WebWhispr Content Script
+// Handles hotkey and text insertion
 
 let activeElement = null;
-let isRecording = false;
 
+// Listen for messages from background script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === 'INSERT_TRANSCRIPTION') {
-        insertTranscription(message.text);
+    switch (message.type) {
+        case 'INSERT_TRANSCRIPTION':
+            insertTranscription(message.text);
+            break;
     }
+
     sendResponse({ success: true });
 });
 
+// Keyboard shortcut: Right Shift
+let shiftDownTime = null;
+let recordingTimeout = null;
+
 document.addEventListener('keydown', (event) => {
-    if (event.code === 'ShiftRight' && !isRecording) {
+    if (event.code === 'ShiftRight') {
         event.preventDefault();
+        shiftDownTime = Date.now();
         activeElement = document.activeElement;
 
-        if (isTextInput(activeElement)) {
-            isRecording = true;
+        recordingTimeout = setTimeout(() => {
             chrome.runtime.sendMessage({ type: 'START_RECORDING' });
-        }
+        }, 150);
     }
 });
 
 document.addEventListener('keyup', (event) => {
-    if (event.code === 'ShiftRight' && isRecording) {
+    if (event.code === 'ShiftRight') {
         event.preventDefault();
-        isRecording = false;
-        chrome.runtime.sendMessage({ type: 'STOP_RECORDING' });
+        clearTimeout(recordingTimeout);
+
+        if (shiftDownTime && Date.now() - shiftDownTime >= 150) {
+            chrome.runtime.sendMessage({ type: 'STOP_RECORDING' });
+        }
+
+        shiftDownTime = null;
     }
 });
 
 function insertTranscription(text) {
-    if (!activeElement) return;
-
     activeElement.focus();
 
-    if (activeElement.getAttribute('contenteditable') === 'true') {
-        const selection = window.getSelection();
-        const range = selection.getRangeAt(0);
-        const textNode = document.createTextNode(text);
-        range.insertNode(textNode);
-        range.setStartAfter(textNode);
-        range.setEndAfter(textNode);
-        selection.removeAllRanges();
-        selection.addRange(range);
-        activeElement.dispatchEvent(new Event('input', { bubbles: true }));
-    } else if (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA') {
-        const start = activeElement.selectionStart;
-        const end = activeElement.selectionEnd;
-        const currentValue = activeElement.value;
-        activeElement.value = currentValue.substring(0, start) + text + currentValue.substring(end);
-        const newPosition = start + text.length;
-        activeElement.selectionStart = newPosition;
-        activeElement.selectionEnd = newPosition;
-        activeElement.dispatchEvent(new Event('input', { bubbles: true }));
-        activeElement.dispatchEvent(new Event('change', { bubbles: true }));
-    }
+    const start = activeElement.selectionStart;
+    const end = activeElement.selectionEnd;
+    const currentValue = activeElement.value;
+
+    activeElement.value = currentValue.substring(0, start) + text + currentValue.substring(end);
+
+    const newPosition = start + text.length;
+    activeElement.selectionStart = newPosition;
+    activeElement.selectionEnd = newPosition;
+
+    activeElement.dispatchEvent(new Event('input', { bubbles: true }));
+    activeElement.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
-function isTextInput(element) {
-    if (!element) return false;
-
-    const tagName = element.tagName?.toUpperCase();
-
-    // Check if it's an input field
-    if (tagName === 'INPUT') {
-        const type = element.type?.toLowerCase();
-        return ['text', 'search', 'email', 'url', 'tel', 'password'].includes(type) || !type;
-    }
-
-    // Check if it's a textarea
-    if (tagName === 'TEXTAREA') {
-        return true;
-    }
-
-    // Check if it's contenteditable
-    if (element.getAttribute('contenteditable') === 'true') {
-        return true;
-    }
-
-    return false;
-}
