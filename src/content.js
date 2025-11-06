@@ -84,28 +84,31 @@ function showRecordingIndicator() {
     recordingIndicator.id = 'webwhispr-recording-indicator';
     recordingIndicator.style.cssText = `
         position: fixed;
-        width: 14px;
-        height: 14px;
+        width: 40px;
+        height: 40px;
         background-color: #3b82f6;
         border-radius: 50%;
         border: none;
         pointer-events: none;
         z-index: 10000;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        transform-origin: center center;
     `;
     document.body.appendChild(recordingIndicator);
-    updateIndicatorPosition();
 }
 
 function updateIndicatorPosition() {
-    if (!recordingIndicator) return;
-
-    recordingIndicator.style.left = (window.innerWidth - 30) + 'px';
-    recordingIndicator.style.top = '20px';
+    // No longer needed - fixed positioning in center
 }
 
 function bounceIndicator() {
     if (!recordingIndicator) return;
 
+    // Remove translate from animation by applying it separately
+    recordingIndicator.style.left = '50%';
+    recordingIndicator.style.top = '50%';
     recordingIndicator.style.animation = 'webwhispr-bounce 0.6s ease-in-out infinite';
 }
 
@@ -121,15 +124,15 @@ const style = document.createElement('style');
 style.textContent = `
     @keyframes webwhispr-bounce {
         0% {
-            transform: scale(1);
+            transform: translate(-50%, -50%) scale(1);
             opacity: 1;
         }
         50% {
-            transform: scale(1.4);
+            transform: translate(-50%, -50%) scale(1.4);
             opacity: 0.8;
         }
         100% {
-            transform: scale(1);
+            transform: translate(-50%, -50%) scale(1);
             opacity: 1;
         }
     }

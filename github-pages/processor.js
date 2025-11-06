@@ -23,7 +23,7 @@ async function initializeModel() {
         // Create the transcription pipeline
         transcriber = await pipeline(
             'automatic-speech-recognition',
-            'Xenova/whisper-small', // Using small model for better accuracy
+            'Xenova/whisper-base', // Using base model
             {
                 // Model options
                 revision: 'main',
