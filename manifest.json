@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "description": "Privacy-respecting voice input for any text field",
   "permissions": [
-    "activeTab",
     "storage",
     "offscreen"
   ],
@@ -12,14 +11,8 @@
     "<all_urls>"
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; frame-src chrome-extension: https://*.github.io;"
+    "extension_pages": "script-src 'self'; object-src 'self'; frame-src chrome-extension:;"
   },
-  "web_accessible_resources": [
-    {
-      "resources": ["offscreen/recorder.html"],
-      "matches": ["<all_urls>"]
-    }
-  ],
   "background": {
     "service_worker": "background.js"
   },

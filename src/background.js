@@ -79,15 +79,6 @@ class BackgroundService {
             type: 'START_RECORDING'
         });
 
-        // Update extension icon to show recording state
-        this.updateIcon(true);
-
-        // Notify content script
-        if (tabId) {
-            chrome.tabs.sendMessage(tabId, {
-                type: 'RECORDING_STARTED'
-            });
-        }
     }
 
     async handleStopRecording() {
@@ -127,32 +118,18 @@ class BackgroundService {
                 });
             } catch (error) {
                 console.error('[Background] Failed to send to tab:', error);
-                this.showNotification('Audio Recorded', 'Audio was recorded but could not be inserted');
             }
         }
 
         // Reset recording state
         this.isRecording = false;
-        this.updateIcon(false);
     }
 
     handleRecordingError(error) {
         console.error('[Background] Recording error:', error);
 
-        // Notify user
-        this.showNotification('Recording Error', error);
-
         // Reset recording state
         this.isRecording = false;
-        this.updateIcon(false);
-
-        // Notify content script
-        if (this.activeTabId) {
-            chrome.tabs.sendMessage(this.activeTabId, {
-                type: 'RECORDING_ERROR',
-                error: error
-            });
-        }
     }
 
     async ensureOffscreenDocument() {
@@ -198,41 +175,6 @@ class BackgroundService {
         }
     }
 
-    updateIcon(isRecording) {
-        const iconPath = isRecording ? {
-            16: 'icons/icon16-recording.png',
-            48: 'icons/icon48-recording.png',
-            128: 'icons/icon128-recording.png'
-        } : {
-            16: 'icons/icon16.png',
-            48: 'icons/icon48.png',
-            128: 'icons/icon128.png'
-        };
-
-        // Only update if icons exist, otherwise use badge
-        chrome.action.setIcon({ path: iconPath }).catch(() => {
-            // Fallback to badge if icons don't exist
-            chrome.action.setBadgeText({
-                text: isRecording ? 'REC' : ''
-            });
-
-            chrome.action.setBadgeBackgroundColor({
-                color: '#FF0000'
-            });
-        });
-
-        // Update tooltip
-        chrome.action.setTitle({
-            title: isRecording ? 'Click to stop recording' : 'Click to start voice input'
-        });
-    }
-
-    showNotification(title, message) {
-        console.log('[Background] Notification:', title, message);
-
-        // For now, just log. In production, you might want to use chrome.notifications API
-        // or send to content script to show in-page notification
-    }
 }
 
 // Initialize the background service

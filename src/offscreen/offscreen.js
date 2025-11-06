@@ -11,7 +11,6 @@ class OffscreenManager {
     init() {
         console.log('[Offscreen] Initializing...');
         this.setupMessageListeners();
-        this.updateStatus('Offscreen initialized');
     }
 
     setupMessageListeners() {
@@ -64,7 +63,6 @@ class OffscreenManager {
 
             case 'RECORDING_ERROR':
                 console.error('[Offscreen] Recording error:', data.error);
-                this.updateStatus(`Recording error: ${data.error}`);
                 this.removeRecordingIframe();
                 chrome.runtime.sendMessage({
                     type: 'RECORDING_ERROR',
@@ -76,7 +74,6 @@ class OffscreenManager {
 
     startRecording() {
         console.log('[Offscreen] Starting recording...');
-        this.updateStatus('Starting recording...');
 
         // Create recording iframe if it doesn't exist
         if (!this.recordingIframe) {
@@ -91,7 +88,6 @@ class OffscreenManager {
 
     stopRecording() {
         console.log('[Offscreen] Stopping recording...');
-        this.updateStatus('Stopping recording...');
 
         if (this.recordingIframe) {
             // Send message to recording iframe to stop and send data
@@ -109,11 +105,6 @@ class OffscreenManager {
         // Create the iframe element
         const iframe = document.createElement('iframe');
         iframe.id = 'recording-iframe';
-        iframe.style.width = '100%';
-        iframe.style.height = '150px';
-        iframe.style.border = '1px solid #ff9999';
-        iframe.style.borderRadius = '4px';
-        iframe.style.marginBottom = '10px';
 
         // Use the actual HTML file from the extension
         iframe.src = chrome.runtime.getURL('offscreen/recorder.html');
@@ -121,8 +112,6 @@ class OffscreenManager {
         // Add to container
         container.appendChild(iframe);
         this.recordingIframe = iframe;
-
-        this.updateStatus('Recording iframe created');
     }
 
     removeRecordingIframe() {
@@ -131,13 +120,11 @@ class OffscreenManager {
         if (this.recordingIframe) {
             this.recordingIframe.remove();
             this.recordingIframe = null;
-            this.updateStatus('Recording iframe removed');
         }
     }
 
     async handleAudioData(audioData) {
         console.log('[Offscreen] Received audio data');
-        this.updateStatus('Audio received, sending to background...');
 
         // Send audio directly to background script
         chrome.runtime.sendMessage({
@@ -145,18 +132,7 @@ class OffscreenManager {
             audio: audioData
         });
     }
-
-    updateStatus(text) {
-        const statusEl = document.getElementById('status');
-        if (statusEl) {
-            statusEl.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
-        }
-        console.log('[Offscreen Status]', text);
-    }
 }
 
 // Initialize the offscreen manager
 const offscreenManager = new OffscreenManager();
-
-// Notify background that offscreen is ready
-chrome.runtime.sendMessage({ type: 'OFFSCREEN_READY' });
