@@ -11,7 +11,7 @@
     "<all_urls>"
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; frame-src chrome-extension:;"
+    "extension_pages": "script-src 'self'; object-src 'self'; frame-src chrome-extension: https://duniaka.github.io;"
   },
   "background": {
     "service_worker": "background.js"

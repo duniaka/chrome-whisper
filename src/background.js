@@ -86,10 +86,9 @@ class BackgroundService {
         }
     }
 
-    async handleAudioRecorded(audioData) {
-        // TODO: Process audio with Whisper
-        // For now, just send a placeholder
-        const text = '[Audio recorded - transcription not yet implemented]';
+    async handleAudioRecorded(data) {
+        // If text is provided, use it; otherwise use placeholder
+        const text = data.text || '[Audio recorded - transcription not yet implemented]';
 
         // Send to content script
         if (this.activeTabId) {

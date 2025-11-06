@@ -4,12 +4,14 @@
 class OffscreenManager {
     constructor() {
         this.recordingIframe = null;
+        this.processorIframe = null;
 
         this.init();
     }
 
     init() {
         console.log('[Offscreen] Initializing...');
+        this.createProcessorIframe();
         this.setupMessageListeners();
     }
 
@@ -123,12 +125,41 @@ class OffscreenManager {
     }
 
     async handleAudioData(audioData) {
-        console.log('[Offscreen] Received audio data');
+        console.log('[Offscreen] Received audio data, sending to processor...');
 
-        // Send audio directly to background script
-        chrome.runtime.sendMessage({
-            type: 'AUDIO_RECORDED',
-            audio: audioData
+        // Send audio to processor iframe for transcription
+        if (this.processorIframe) {
+            this.processorIframe.contentWindow.postMessage({
+                type: 'TRANSCRIBE',
+                audio: audioData
+            }, '*');
+        }
+    }
+
+    createProcessorIframe() {
+        console.log('[Offscreen] Creating processor iframe...');
+
+        const container = document.getElementById('iframe-container');
+
+        // Create the iframe element
+        const iframe = document.createElement('iframe');
+        iframe.id = 'processor-iframe';
+        iframe.src = 'https://duniaka.github.io/chrome-whisper/github-pages/processor.html';
+        iframe.style.display = 'none';
+
+        // Add to container
+        container.appendChild(iframe);
+        this.processorIframe = iframe;
+
+        // Listen for transcription results from processor
+        window.addEventListener('message', (event) => {
+            if (event.origin === 'https://duniaka.github.io' && event.data.type === 'TRANSCRIPTION_RESULT') {
+                console.log('[Offscreen] Received transcription from processor');
+                chrome.runtime.sendMessage({
+                    type: 'AUDIO_RECORDED',
+                    text: event.data.text
+                });
+            }
         });
     }
 }
