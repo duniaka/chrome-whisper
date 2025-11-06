@@ -30,7 +30,11 @@ document.addEventListener('keydown', (event) => {
         // Check if it's a text input field
         if (isTextInput(activeElement)) {
             console.log('[WebWhispr Content] Right Shift pressed, starting recording...');
-            chrome.runtime.sendMessage({ type: 'START_RECORDING' });
+            try {
+                chrome.runtime.sendMessage({ type: 'START_RECORDING' });
+            } catch (error) {
+                console.error('[WebWhispr Content] Failed to send message:', error);
+            }
         }
     }
 });
